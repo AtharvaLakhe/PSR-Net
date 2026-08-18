@@ -1,0 +1,15 @@
+{
+  "name": "snowwhite",
+  "version": "1.0.0",
+  "description": "Orbital earth observation terminal - a WebGL Earth in a deep starfield with a satellite you can task",
+  "type": "module",
+  "scripts": {
+    "serve": "node server.mjs",
+    "test": "node test-geo.mjs",
+    "test:e2e": "node test-e2e.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.185.1"
+  }
+}

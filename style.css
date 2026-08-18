@@ -1,0 +1,432 @@
+/* ── Orbital: earth observation terminal ────────────────────────────────── */
+
+:root {
+  --ink: #dfe7f2;
+  --dim: #7d8a9e;
+  --line: rgba(140, 170, 210, 0.18);
+  --accent: #58b7ff;
+  --accent-warm: #ffb454;
+  --panel: rgba(8, 13, 22, 0.82);
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+/* An author `display` rule outranks the UA [hidden] rule, so #console (display:grid)
+   would render even while hidden. Force it back for every hidden element. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: var(--ink);
+  font-family: var(--mono);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+#stage.grabbing { cursor: grabbing; }
+#stage.pointing { cursor: crosshair; }
+#stage.targetable { cursor: pointer; }
+
+/* ── loader ─────────────────────────────────────────────────────────────── */
+#loader {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #000;
+  z-index: 60;
+  transition: opacity 700ms ease;
+}
+#loader.done { opacity: 0; pointer-events: none; }
+.loader-inner { text-align: center; }
+.loader-ring {
+  width: 46px; height: 46px;
+  margin: 0 auto 22px;
+  border: 1px solid rgba(88, 183, 255, 0.22);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1.1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loader-text {
+  margin: 0 0 16px;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.dots::after {
+  content: "";
+  animation: dots 1.6s steps(4, end) infinite;
+}
+@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+.loader-bar {
+  width: 190px; height: 1px;
+  background: rgba(140, 170, 210, 0.16);
+  margin: 0 auto;
+  overflow: hidden;
+}
+.loader-bar i {
+  display: block; height: 100%; width: 0%;
+  background: var(--accent);
+  transition: width 260ms ease;
+}
+
+/* ── HUD ────────────────────────────────────────────────────────────────── */
+#hud-top, #hud-bottom {
+  position: fixed;
+  left: 0; right: 0;
+  z-index: 20;
+  pointer-events: none;
+  padding: 22px clamp(18px, 4vw, 44px);
+  opacity: 0;
+  transition: opacity 900ms ease 200ms;
+}
+body.ready #hud-top, body.ready #hud-bottom { opacity: 1; }
+#hud-top {
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+#hud-bottom { bottom: 0; text-align: center; }
+
+.brand { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+/* The mark carries the live-signal pulse the old standalone dot used to. One
+   element doing both keeps the header from collecting decorations. */
+.brand-logo {
+  width: 21px;
+  height: 21px;
+  flex: none;
+  fill: currentColor;
+  color: var(--ink);
+  filter: drop-shadow(0 0 10px rgba(90, 180, 240, 0.35));
+  animation: pulse 4.2s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }
+.brand-name { font-size: 13px; letter-spacing: 0.34em; font-weight: 600; }
+.brand-sub {
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+}
+
+.telemetry { display: flex; gap: clamp(12px, 2.4vw, 30px); }
+.tel { text-align: right; min-width: 62px; }
+.tel label {
+  display: block;
+  font-size: 8.5px;
+  letter-spacing: 0.22em;
+  color: var(--dim);
+  margin-bottom: 3px;
+}
+.tel span {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.hint {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+  transition: opacity 400ms ease;
+}
+.hint b { color: var(--accent); font-weight: 600; }
+
+/* ── cursor readout over the globe ──────────────────────────────────────── */
+#cursor-readout {
+  position: fixed;
+  z-index: 25;
+  pointer-events: none;
+  transform: translate(14px, -50%);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  line-height: 1.5;
+  padding: 7px 11px;
+  background: rgba(6, 11, 19, 0.72);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  backdrop-filter: blur(7px);
+  white-space: nowrap;
+}
+#cursor-coords { display: block; color: var(--ink); font-variant-numeric: tabular-nums; }
+#cursor-place { display: block; color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.16em; }
+
+/* ── satellite tooltip ──────────────────────────────────────────────────── */
+#sat-tip {
+  position: fixed;
+  z-index: 25;
+  pointer-events: none;
+  transform: translate(-50%, -28px);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  padding: 5px 10px;
+  color: #04121f;
+  background: var(--accent-warm);
+  white-space: nowrap;
+  animation: tipin 220ms ease;
+}
+@keyframes tipin { from { opacity: 0; transform: translate(-50%, -20px); } }
+
+/* ── targeting console ──────────────────────────────────────────────────────
+   Rebuilt to match the atlas the satellite hands over to: no card, no chips,
+   no boxed modal. A full-bleed dark field, display type, and the quick targets
+   as a list you run down rather than a grid of tiles.
+   Every token is scoped to #console so nothing here can reach the HUD or the
+   globe, which keep their own blue. */
+#console {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  padding: 20px;
+
+  --c-ink: #eef2f4;
+  --c-dim: #9fb0bb;
+  --c-faint: #62727d;
+  --c-hair: rgba(126, 170, 205, 0.16);
+  --c-accent: #48d6ef;
+  --c-ease: cubic-bezier(0.2, 0.9, 0.2, 1);
+  --c-display: "Fraunces", Georgia, serif;
+  --c-body: "Public Sans", system-ui, sans-serif;
+  --c-mono: "IBM Plex Mono", var(--mono);
+
+  /* Scrim, not a page. The planet stays visible behind the console, which is
+     what stops the target step feeling like a different site. */
+  background: rgba(3, 6, 11, 0.5);
+  backdrop-filter: blur(9px) saturate(1.1);
+  -webkit-backdrop-filter: blur(9px) saturate(1.1);
+  animation: fade 220ms ease;
+}
+@keyframes fade { from { opacity: 0; } }
+
+/* A contained block again, and glass: enough blur that the type stays legible
+   over a lit ocean, enough transparency that the globe is still there. */
+.console-panel {
+  position: relative;
+  width: min(56rem, 100%);
+  max-height: min(88vh, 52rem);
+  overflow-y: auto;
+  padding: clamp(2rem, 5vh, 3.2rem) clamp(1.5rem, 3.5vw, 2.8rem) clamp(2rem, 4vh, 2.8rem);
+  font-family: var(--c-body);
+  color: var(--c-ink);
+  background: linear-gradient(160deg, rgba(22, 34, 48, 0.58), rgba(8, 14, 22, 0.7));
+  backdrop-filter: blur(28px) saturate(1.4);
+  -webkit-backdrop-filter: blur(28px) saturate(1.4);
+  border: 1px solid rgba(126, 170, 205, 0.22);
+  border-radius: 14px;
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  animation: rise 320ms var(--c-ease);
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-hair) transparent;
+}
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+.console-panel::before, .console-panel::after { content: none; }
+.console-glow { display: none; }
+
+.console-close {
+  position: absolute;
+  top: 1rem; right: 1.1rem;
+  width: 2.1rem; height: 2.1rem;
+  background: none;
+  border: 1px solid var(--c-hair);
+  border-radius: 50%;
+  color: var(--c-faint);
+  font-family: var(--c-mono);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 200ms var(--c-ease), border-color 200ms var(--c-ease), transform 240ms var(--c-ease);
+}
+.console-close:hover { color: var(--c-ink); border-color: var(--c-faint); transform: rotate(90deg); }
+
+#console-title {
+  margin: 0 0 0.9rem;
+  max-width: 16ch;
+  font-family: var(--c-display);
+  font-size: clamp(2rem, 6vw, 3.4rem);
+  font-weight: 300;
+  font-variation-settings: "SOFT" 40, "WONK" 1, "opsz" 120;
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  text-transform: none;
+  color: var(--c-ink);
+}
+.console-lede {
+  margin: 0 0 2.4rem;
+  max-width: 52ch;
+  font-size: 0.98rem;
+  line-height: 1.6;
+  color: var(--c-dim);
+}
+
+/* The field is a rule you type on, not a box. */
+#console .field {
+  display: flex; flex-direction: row; flex-wrap: nowrap; align-items: stretch;
+  gap: 0; min-width: 0;
+  border-bottom: 1px solid var(--c-hair);
+  transition: border-color 200ms var(--c-ease), box-shadow 200ms var(--c-ease);
+}
+/* Focus lands on the whole field, not as a rectangle around the input. The
+   previous ring was a 2px outline offset from a borderless full-width input,
+   which drew a large cyan box across the screen and read as an error state. */
+#console .field:focus-within {
+  border-bottom-color: var(--c-accent);
+  box-shadow: 0 1px 0 0 var(--c-accent), 0 14px 34px -22px var(--c-accent);
+}
+#query {
+  flex: 1;
+  min-width: 0;
+  padding: 1.05rem 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--c-ink);
+  font-family: var(--c-mono);
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  outline: none;
+  transition: border-color 200ms var(--c-ease);
+}
+#query::placeholder { color: var(--c-faint); }
+#query:focus { box-shadow: none; }
+#query:focus-visible { outline: none; }
+#go {
+  flex: none;
+  padding: 0 0 0 1.75rem;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--c-dim);
+  font-family: var(--c-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  cursor: pointer;
+  transition: color 200ms var(--c-ease), border-color 200ms var(--c-ease);
+}
+#go::before { content: none; }
+#go:hover, #go:focus-visible { color: var(--c-accent); }
+
+.console-error {
+  margin: 1rem 0 0;
+  padding-left: 1rem;
+  border-left: 2px solid #ffd166;
+  font-family: var(--c-body);
+  font-size: 0.9rem;
+  letter-spacing: 0;
+  color: #ffd166;
+}
+
+.suggestions { list-style: none; margin: 0.5rem 0 0; padding: 0; max-height: 15rem; overflow-y: auto; border: 0; }
+.suggestions li {
+  padding: 0.85rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--c-hair);
+  border-radius: 0;
+  font-family: var(--c-body);
+  font-size: 0.95rem;
+  color: var(--c-dim);
+  cursor: pointer;
+  transition: color 200ms var(--c-ease), padding-left 320ms var(--c-ease);
+}
+.suggestions li:hover, .suggestions li[aria-selected="true"] {
+  background: none;
+  color: var(--c-ink);
+  padding-left: 0.9rem;
+}
+.suggestions li em { font-style: normal; color: var(--c-accent); }
+.suggestions li span { float: right; font-family: var(--c-mono); font-size: 0.78rem; color: var(--c-faint); }
+
+.console-foot { margin-top: 2.2rem; padding-top: 0; border: 0; }
+.console-foot-label {
+  display: block;
+  margin-bottom: 0.2rem;
+  font-family: var(--c-mono);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  color: var(--c-faint);
+}
+.console-foot-label::before, .console-foot-label::after { content: none; }
+
+/* Targets as a list, two columns on wide screens. Each row opens on hover with
+   a hairline that fills — the same gesture the atlas uses everywhere. */
+.chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
+  column-gap: 2.5rem;
+  row-gap: 0;
+  border-top: 1px solid var(--c-hair);
+}
+.chips button {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.9rem 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--c-hair);
+  border-radius: 0;
+  color: var(--c-dim);
+  font-family: var(--c-body);
+  font-size: 1rem;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  cursor: pointer;
+  transition: color 200ms var(--c-ease), padding-left 320ms var(--c-ease);
+}
+.chips button::before {
+  content: "";
+  position: absolute; left: 0; bottom: -1px; height: 1px; width: 0;
+  background: var(--c-accent);
+  transition: width 420ms var(--c-ease);
+}
+.chips button:hover { color: var(--c-ink); padding-left: 0.9rem; background: none; }
+.chips button:hover::before { width: 100%; }
+.chips button small {
+  margin-left: 0;
+  font-family: var(--c-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  color: var(--c-faint);
+}
+.chips button:hover small { color: var(--c-accent); }
+
+#console :is(button, [href], li):focus-visible { outline: 2px solid var(--c-accent); outline-offset: 3px; }
+
+@media (max-width: 720px) {
+  .console-panel { padding: 3.5rem 1.1rem 3rem; }
+  #console-title { font-size: 2rem; }
+}
+
+/* Telemetry reads as a measured row rather than four floating numbers. */
+.telemetry {
+  padding-left: clamp(12px, 2vw, 22px);
+  border-left: 1px solid var(--line);
+}
+
+.hint { letter-spacing: 0.2em; }
