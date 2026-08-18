@@ -1,32 +1,34 @@
-/* Is this coordinate land or water?
+/* Is this coordinate mare or highland?
 
-   The hover readout used to answer that by inference — "no city within range,
-   therefore open water" — which is wrong in both directions. It called the
-   middle of Siberia open water, and it called 400 km of the Bay of Bengal
-   Kolkata. Neither is a labelling nicety: the readout is the one thing on the
-   page claiming to know where the cursor is.
+   The readout must not answer that by inference — "no named feature within
+   range, therefore highland" is wrong in both directions, and the readout is
+   the one thing on the page claiming to know where the cursor is.
 
-   So measure it instead. assets/earth_ocean.jpg is already loaded for the
-   globe — the vertex shader displaces against it, `1.0 - ocean.r` being land —
-   so the mask the surface is built from is the mask the readout reads. Nothing
-   new ships and the two can never disagree.
+   So measure it instead, against the same albedo map the globe is wearing:
+   the LROC mosaic, where a mare is dark because it is basalt, not because a
+   gazetteer says so. The surface being drawn and the surface being described
+   can never disagree.
 
-   4096x2048 is ~10 km per pixel at the equator, which is finer than the
-   gazetteer and finer than a hand can hold a cursor. Kept as one bit per
-   pixel (1 MB) and decoded in horizontal strips, so the transient ImageData
-   is 4 MB rather than the 32 MB a whole-image read would allocate. */
+   8192x4096 is ~1.3 km per pixel at the equator, finer than the gazetteer and
+   finer than a hand can hold a cursor. Kept as one bit per pixel (1 MB) and
+   decoded in horizontal strips, so the transient ImageData is 4 MB rather than
+   the 32 MB a whole-image read would allocate. */
 
 let mask = null;          // { w, h, bits } once decoded
 let pending = null;
 
 const STRIP = 256;        // rows per getImageData call
-const WATER = 128;        // mask is near-binary; anything above mid is sea
+/* In the LROC mosaic the maria sit around 0.28 in sRGB and the highlands around
+   0.60, so a threshold between the two populations separates them with room to
+   spare — crater rims inside a sea stay mare, ejecta on a highland stays
+   highland. Read off the red channel, which is where the basalts are darkest. */
+const MARE = 112;
 
-export function loadLandMask(url = 'assets/earth_ocean.jpg') {
+export function loadMareMask(url = 'assets/moon_day.jpg') {
   pending ??= decode(url).catch((err) => {
     // A tainted canvas (file://) or a missing asset is not fatal — isWater()
     // keeps returning null and the readout simply stops claiming water.
-    console.warn('[orbital] land mask unavailable, readout will omit sea/land', err);
+    console.warn('[orbital] mare mask unavailable, readout will omit terrain type', err);
     return null;
   });
   return pending;
@@ -57,7 +59,7 @@ async function decode(url) {
       const row = (y0 + y) * w;
       const src = y * w * 4;
       for (let x = 0; x < w; x++) {
-        if (data[src + x * 4] >= WATER) {
+        if (data[src + x * 4] < MARE) {
           const i = row + x;
           bits[i >> 3] |= 1 << (i & 7);
         }
@@ -69,9 +71,9 @@ async function decode(url) {
   return mask;
 }
 
-/* true over sea, false over land, null while the mask is still decoding —
-   callers must treat null as "do not claim either", never as land. */
-export function isWater(lat, lon) {
+/* true over mare, false over highland, null while the mask is still decoding —
+   callers must treat null as "do not claim either", never as highland. */
+export function isMare(lat, lon) {
   if (!mask) return null;
   const { w, h, bits } = mask;
 
@@ -86,4 +88,4 @@ export function isWater(lat, lon) {
   return ((bits[i >> 3] >> (i & 7)) & 1) === 1;
 }
 
-export const landMaskReady = () => mask !== null;
+export const mareMaskReady = () => mask !== null;

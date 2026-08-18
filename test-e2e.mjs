@@ -141,7 +141,7 @@ try {
   console.log('\nhover + click the satellite');
   // Reload onto a deep link so the craft is holding station between the camera and
   // the globe. In free orbit it moves every frame and the pick would be a race.
-  await send('Page.navigate', { url: `${URL_BASE}?target=Tokyo` });
+  await send('Page.navigate', { url: `${URL_BASE}?target=Tycho` });
   await waitFor('scene reboot', 'typeof window.__orbital === "object" && document.body.classList.contains("ready")');
   await waitFor('holding station', 'window.__orbital.state.mode === "holding"');
   ok('deep link puts the craft on station', true);
@@ -169,27 +169,27 @@ try {
   console.log('\ntype a query');
   await evaluate(`(() => {
     const q = document.getElementById('query');
-    q.value = 'Toky';
+    q.value = 'Tych';
     q.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
   await sleep(300);
   const sugg = await evaluate('document.querySelectorAll("#suggestions li").length');
   ok('suggestions render', sugg > 0, `count=${sugg}`);
-  ok('first suggestion is Tokyo',
-    (await evaluate('document.querySelector("#suggestions li")?.textContent || ""')).includes('Tokyo'));
+  ok('first suggestion is Tycho',
+    (await evaluate('document.querySelector("#suggestions li")?.textContent || ""')).includes('Tycho'));
 
   console.log('\nsubmit the target');
   await evaluate(`(() => {
     const q = document.getElementById('query');
-    q.value = 'Tokyo';
+    q.value = 'Tycho';
     document.getElementById('console-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   })()`);
   await sleep(400);
   ok('console closes on submit', await evaluate('document.getElementById("console").hidden'));
-  ok('target recorded', (await evaluate('window.__orbital.state.target?.name')) === 'Tokyo');
-  ok('label shows the name', (await evaluate('document.getElementById("target-name").textContent')) === 'TOKYO');
+  ok('target recorded', (await evaluate('window.__orbital.state.target?.name')) === 'Tycho');
+  ok('label shows the name', (await evaluate('document.getElementById("target-name").textContent')) === 'TYCHO');
   ok('label shows coordinates',
-    /35\.\d+°N/.test(await evaluate('document.getElementById("target-coords").textContent')));
+    /43\.\d+°S/.test(await evaluate('document.getElementById("target-coords").textContent')));
   ok('enters slew or hold',
     ['slewing', 'holding'].includes(await evaluate('window.__orbital.state.mode')));
   ok('marker sits on the target',
@@ -197,7 +197,7 @@ try {
       const { THREE, state, vec3ToLatLon } = window.__orbital;
       const d = state.target.localDir;
       const ll = vec3ToLatLon({ x: d.x, y: d.y, z: d.z });
-      return Math.abs(ll.lat - 35.6762) < 0.01 && Math.abs(ll.lon - 139.6503) < 0.01;
+      return Math.abs(ll.lat - -43.3) < 0.01 && Math.abs(ll.lon - -11.4) < 0.01;
     })()`));
 
   console.log('\nreject a bad query');

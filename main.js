@@ -1,7 +1,8 @@
 /* ── Orbital ─────────────────────────────────────────────────────────────
-   Earth at centre of a deep starfield, with the Blender-built comms satellite
-   in a tilted orbit. Hover the globe for live coordinates; click the satellite
-   to target a place by name or lat/lon.
+   The Moon at centre of a deep starfield — surface modelled and baked in
+   Blender — with the comms satellite in a tilted orbit. Hover the globe for
+   live selenographic coordinates; click the satellite to target a feature by
+   name or lat/lon.
    ──────────────────────────────────────────────────────────────────────── */
 
 import * as THREE from 'three';
@@ -13,31 +14,36 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { PLACES, findPlaces, nearestPlace, describeLocation } from './places.js';
-import { loadLandMask, isWater } from './landmask.js';
+import { loadMareMask, isMare } from './maremask.js';
 import { latLonToVec3 as latLonXYZ, vec3ToLatLon, parseQuery, fmtLat, fmtLon } from './geo.js';
-import { ATMOSPHERE_GLSL, NOISE_GLSL, SRGB_GLSL } from './shaders.js';
+import { NOISE_GLSL, SRGB_GLSL } from './shaders.js';
 import { pickTier } from './quality.js';
 
-const EARTH_R = 1;
-const CLOUD_R = EARTH_R * 1.006;
-// Must stay equal to R_TOP in shaders.js — the shell mesh and the integrator's
-// idea of where the atmosphere ends have to be the same surface, or the halo
-// either clips inside the mesh or stops short of its edge.
-const ATMO_R = EARTH_R * 1.035;
-const ORBIT_R = EARTH_R * 1.46;
+const MOON_R = 1;
+// Peak LOLA relief baked into assets/moon.glb, in moon radii. Anything drawn on
+// the surface has to clear it or a rim will poke through the marker.
+const RELIEF = 0.0102;
+const ORBIT_R = MOON_R * 1.46;
 const ORBIT_TILT = THREE.MathUtils.degToRad(28);
-const AXIAL_TILT = THREE.MathUtils.degToRad(23.4);
+// The Moon's obliquity is 6.7° to its orbit — nothing like Earth's 23.4°, which
+// is why the poles hold permanently shadowed floors.
+const AXIAL_TILT = THREE.MathUtils.degToRad(6.7);
 const SAT_SPAN = 0.26;            // largest dimension, same ratio as the blender scene
-const SPIN = 0.0135;              // earth radians/second
+// It is tidally locked: one rotation per orbit, 27.3 days. Held well above real
+// time so the terminator still visibly crawls in a demo.
+const SPIN = 0.0062;              // radians/second
 const ORBIT_RATE = 0.062;         // satellite radians/second — ~101 s per revolution
-/* Solar irradiance for the scattering integral. This is not a free dial: the
-   surface term is `albedo * 1.15 * cos(theta)`, i.e. E/PI with E = 1.15*PI, so
-   the atmosphere has to be handed the same E or the two are in different units
-   and the haze either vanishes or floods the disc. Change one, change both. */
+/* Solar irradiance at 1 AU, in the same E/PI units the surface term uses. */
 const SUN_INTENSITY = 1.15 * Math.PI;
-// angled toward the default camera so the opening view lands on the day side,
-// with the terminator sweeping across the left limb
-const SUN_DIR = new THREE.Vector3(-0.52, 0.26, 0.81).normalize();
+/* Well off the camera axis on purpose. A sun over your shoulder gives the full
+   Moon we all know — flat, no shadows, the phase where a telescope shows least.
+   Swung out to about 60 degrees, the same craters throw shadows a third of their
+   width and the terminator crosses the disc, which is when the relief reads. */
+const SUN_DIR = new THREE.Vector3(-0.78, 0.22, 0.59).normalize();
+/* Where the sun is *now*. It moves: a target on the night side would otherwise
+   be a black disc with a reticle on it, which is a fair picture of the Moon and
+   a useless one for an observation terminal. See turnSunOnto(). */
+const sunDir = SUN_DIR.clone();
 
 const $ = (id) => document.getElementById(id);
 const DEBUG = new URLSearchParams(location.search).has('debug');
@@ -86,8 +92,8 @@ const sunLight = new THREE.DirectionalLight(0xfff4e6, 3.2);
 sunLight.position.copy(SUN_DIR).multiplyScalar(60);
 scene.add(sunLight);
 
-/* Post: a high-threshold bloom so only genuinely bright things glow - city lights,
-   the limb arc, the sun glint - rather than hazing the whole daylit disc.
+/* Post: a high-threshold bloom so only genuinely bright things glow - the
+   sunlit limb, the targeting beam - rather than hazing the whole lit disc.
    Rendering through a composer also means the passes work in linear space and
    OutputPass does tone mapping once, at the end. */
 const composerTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, {
@@ -102,14 +108,14 @@ const bloomPass = new UnrealBloomPass(
   0.62,   // strength
   0.44,   // radius
   // Threshold is luminance in the linear HDR buffer, so it is meaningful above 1.
-  // Sunlit cloud tops sit right at ~1.0; anything lower blooms the entire daylit
-  // disc into a white haze. This keeps it to city lights, the limb and the glint.
+  // The sunlit highlands sit well under 1.0; anything lower blooms the whole lit
+  // disc into a white haze. This keeps it to the sunlit limb and the beam.
   1.20,
 );
 composer.addPass(bloomPass);
 
 /* Final grade. The vignette pulls the eye back to the planet, and the grain is
-   there to dither the atmosphere: a smooth gradient across a wide dark area is
+   there to dither the shadowed limb: a smooth gradient across a wide dark area is
    exactly where 8-bit output banding shows, and a fraction of a code value of
    noise costs nothing and hides it completely. Both are static under
    reduced-motion — a crawling grain field is the thing that rule exists for. */
@@ -168,17 +174,20 @@ const tex = (file) => {
   return t;
 };
 
-const dayMap = tex('earth_day.jpg');
-const nightMap = tex('earth_night.jpg');
-const cloudMap = tex('earth_clouds.jpg');
-const oceanMap = tex('earth_ocean.jpg');
-const topoMap = tex('earth_topo.jpg');
+/* Both maps are the real Moon. Colour is the LROC Wide Angle Camera global
+   mosaic; relief is the LOLA laser-altimeter DEM, turned into a tangent-space
+   normal map — a normal map rather than a height map because 8-bit heights
+   quantise into terraces once you differentiate them, and every slope on this
+   surface is a difference of two heights. Both are NASA/GSFC public domain,
+   from the CGI Moon Kit. */
+const dayMap = tex('moon_day.jpg');
+const normMap = tex('moon_norm.jpg');
 
-/* The same mask, decoded to a CPU-readable bitset so the hover readout can tell
-   sea from land instead of inferring it. Deliberately outside `manager`: the
-   globe does not need it to draw, and a readout that is briefly less specific
-   is better than holding the loader open on it. */
-loadLandMask('assets/earth_ocean.jpg');
+/* The albedo map again, decoded to a CPU-readable bitset so the hover readout
+   can tell mare from highland instead of inferring it. Deliberately outside
+   `manager`: the globe does not need it to draw, and a readout that is briefly
+   less specific is better than holding the loader open on it. */
+loadMareMask('assets/moon_day.jpg');
 
 /* ── starfield: three shells so parallax reads as real depth ────────────── */
 
@@ -396,50 +405,62 @@ const sunSprite = new THREE.Mesh(
 sunSprite.position.copy(SUN_DIR).multiplyScalar(2600);
 scene.add(sunSprite);
 
-/* ── earth ──────────────────────────────────────────────────────────────── */
-const earthGroup = new THREE.Group();
-earthGroup.rotation.z = AXIAL_TILT;
-scene.add(earthGroup);
+/* ── moon ───────────────────────────────────────────────────────────────── */
+const moonGroup = new THREE.Group();
+moonGroup.rotation.z = AXIAL_TILT;
+scene.add(moonGroup);
 
-const earthSpin = new THREE.Group();     // everything that turns with the surface
-earthGroup.add(earthSpin);
+const moonSpin = new THREE.Group();      // everything that turns with the surface
+/* Open on the near side. Longitude 0 sits on +X in the texture layout, so a
+   quarter turn puts the face Earth has always seen — Imbrium, Tranquillitatis,
+   the Tycho rays — under the default camera instead of the crater-saturated
+   far side. */
+moonSpin.rotation.y = -Math.PI / 2;
+moonGroup.add(moonSpin);
 
-const earthMat = new THREE.ShaderMaterial({
+const moonMat = new THREE.ShaderMaterial({
   defines: {
-    // The scattering chunk sizes its loops from these, so the same source
-    // compiles as a cheap 12-step aerial-perspective march here and a 32-step
-    // limb march in the atmosphere shell below.
-    ATMO_STEPS: Q.apSteps,
-    LIGHT_STEPS: Q.apLightSteps,
-    DISPLACE: Q.displacement > 0 ? 1 : 0,
     DETAIL: Q.surfaceDetail ? 1 : 0,
-    WAVES: Q.oceanWaves ? 1 : 0,
   },
   uniforms: {
     uDay: { value: dayMap },
-    uNight: { value: nightMap },
-    uOcean: { value: oceanMap },
-    uTopo: { value: topoMap },
-    uClouds: { value: cloudMap },
+    uNormal: { value: normMap },
     uSun: { value: SUN_DIR.clone() },
     uSunI: { value: SUN_INTENSITY },
-    uCloudOffset: { value: 0 },
-    uTexel: { value: new THREE.Vector2(1 / 4096, 1 / 2048) },
-    uBump: { value: 7.0 },
-    uDisplace: { value: Q.displacement },
+    uBump: { value: 1.85 },
+    /* The Moon is grey, but not neutral grey: the maria are titanium-rich and
+       run blue, the highlands run tan, and the young ray craters are colder
+       than either. The mosaic carries all of that at a few percent chroma —
+       enough to be true, too little to see. This is the mineral-moon lift, the
+       same move the LRO team make in their own release imagery. */
+    uSaturation: { value: 1.8 },
+    /* The bake writes a display-referred map — highlands near 0.8 sRGB — so the
+       craters stay legible at a glance in the texture itself. Real regolith
+       reflects about an eighth of what falls on it, and that gap is what makes
+       an unscaled Moon render as a snowball. Scale it here rather than baking it
+       in: the map keeps its contrast, the render gets the right exposure. */
+    uAlbedo: { value: 0.44 },
+    /* The mosaic's average is warm — red 0.343, green 0.329, blue 0.290 in
+       linear — a property of the whole surface, not of any one rock.
+       Dividing it out first means the saturation lift below opens the maria
+       blue and the highlands tan away from a neutral centre, instead of
+       dragging everything further into brown. */
+    uBalance: { value: new THREE.Vector3(0.976, 1.0, 1.162) },
     // how close the camera is, 0 far / 1 hard in — drives the procedural detail
     // that stands in for texture resolution we do not have
     uCloseness: { value: 0 },
     uTime: { value: 0 },
   },
   vertexShader: /* glsl */`
-    uniform sampler2D uTopo, uOcean;
-    uniform float uDisplace;
     varying vec2 vUv; varying vec3 vN; varying vec3 vWorld;
     varying vec3 vT; varying vec3 vB;
     void main() {
       vUv = uv;
-      vec3 nObj = normalize(normal);
+      // The mesh carries its craters as real geometry, so the shading normal
+      // has to come from the sphere direction rather than the interpolated
+      // vertex normal — the two disagree on a displaced surface, and the
+      // tangent frame below is only orthogonal against the sphere.
+      vec3 nObj = normalize(position);
 
       // Build the tangent frame in object space, where the pole is always +Y.
       // Deriving it from world +Y instead would skew once the axial tilt is
@@ -453,36 +474,20 @@ const earthMat = new THREE.ShaderMaterial({
       vT = normalize(mat3(modelMatrix) * eastObj);
       vB = normalize(mat3(modelMatrix) * northObj);
 
-      vec3 p = position;
-      #if DISPLACE
-        // Real relief, not just a shading trick: the silhouette has to break at
-        // the limb or the planet reads as a decal on a perfect sphere. Land
-        // only — displacing the sea floor would push the coastlines up too.
-        float land = 1.0 - texture2D(uOcean, uv).r;
-        float hh = texture2D(uTopo, uv).r;
-        p += nObj * (hh * land * uDisplace);
-      #endif
-
-      vec4 wp = modelMatrix * vec4(p, 1.0);
+      vec4 wp = modelMatrix * vec4(position, 1.0);
       vWorld = wp.xyz;
       gl_Position = projectionMatrix * viewMatrix * wp;
     }`,
   fragmentShader: /* glsl */`
-    uniform sampler2D uDay, uNight, uOcean, uTopo, uClouds;
+    uniform sampler2D uDay, uNormal;
     uniform vec3 uSun;
-    uniform float uCloudOffset, uBump, uSunI, uCloseness, uTime;
-    uniform vec2 uTexel;
+    uniform float uBump, uSunI, uCloseness, uTime, uAlbedo, uSaturation;
+    uniform vec3 uBalance;
     varying vec2 vUv; varying vec3 vN; varying vec3 vWorld;
     varying vec3 vT; varying vec3 vB;
+    #define PI 3.141592653589793
     ${SRGB_GLSL}
-    ${ATMOSPHERE_GLSL}
     ${NOISE_GLSL}
-
-    float D_GGX(float ndh, float a) {
-      float a2 = a * a;
-      float d = ndh * ndh * (a2 - 1.0) + 1.0;
-      return a2 / (PI * d * d + 1e-7);
-    }
 
     void main() {
       vec3 N = normalize(vN);
@@ -491,127 +496,85 @@ const earthMat = new THREE.ShaderMaterial({
       vec3 Tn = normalize(vT), Bn = normalize(vB);
       mat3 TBN = mat3(Tn, Bn, N);
 
-      vec3 day = decode(texture2D(uDay, vUv).rgb);
-      vec3 night = decode(texture2D(uNight, vUv).rgb);
-      float ocean = texture2D(uOcean, vUv).r;
-      float land = 1.0 - ocean;
+      vec3 albedo = decode(texture2D(uDay, vUv).rgb) * uBalance;
+      albedo = mix(vec3(dot(albedo, vec3(0.2126, 0.7152, 0.0722))), albedo, uSaturation);
+      albedo = max(albedo, vec3(0.0)) * uAlbedo;
 
-      // ── relief: perturb the normal from the height field, land only ──────
-      // Central differences rather than forward: symmetric, so ridges do not
-      // drift half a texel toward +u/+v the way a one-sided slope makes them.
-      float hl = texture2D(uTopo, vUv - vec2(uTexel.x, 0.0)).r;
-      float hr = texture2D(uTopo, vUv + vec2(uTexel.x, 0.0)).r;
-      float hd = texture2D(uTopo, vUv - vec2(0.0, uTexel.y)).r;
-      float hu = texture2D(uTopo, vUv + vec2(0.0, uTexel.y)).r;
-
-      // An equirectangular texel covers less ground in x as you approach the
-      // poles, so the same height delta is a steeper real slope. Correct for it,
-      // but floor the term — at the pole itself the correction is unbounded.
-      float cosLat = max(sin(vUv.y * PI), 0.25);
-      float s = uBump * land;
-      vec3 slope = vec3((hl - hr) * s / cosLat, (hd - hu) * s, 1.0);
+      // ── relief ───────────────────────────────────────────────────────────
+      // Tangent-space normals straight off the altimetry: x east, y north, z up,
+      // the same frame the vertex stage builds. uBump only ever scales the two
+      // lateral components, so flattening or exaggerating the terrain can never
+      // produce a normal that is not a unit vector.
+      vec3 nTex = texture2D(uNormal, vUv).xyz * 2.0 - 1.0;
+      vec3 slope = vec3(nTex.xy * uBump, max(nTex.z, 0.02));
 
       #if DETAIL
-        // Below ~4000 km the 4K basemap is visibly soft. This does not invent
-        // terrain — it adds high-frequency roughness under the real relief so
-        // the eye reads texture instead of a bilinear smear.
-        // Three octaves from a low base, not four from a high one: the top
-        // octave has to stay several pixels wide at the closest the camera can
-        // get, or this stops being detail and becomes sparkle.
+        // The DEM is 4K, about 850 m per texel, so below a few hundred km the
+        // relief map runs out of terrain before the eye does. This does not
+        // invent craters — it adds the high-frequency roughness of regolith
+        // under the real slopes. Three octaves from a low base, not four from a
+        // high one: the top octave has to stay several pixels wide at the
+        // closest the camera can get, or this stops being detail and becomes
+        // sparkle.
         if (uCloseness > 0.005) {
           vec3 pw = normalize(vWorld) * 80.0;
           float e = 0.55;
           float n0 = fbm(pw, 3);
           float nx = fbm(pw + Tn * e, 3);
           float ny = fbm(pw + Bn * e, 3);
-          float k = 2.2 * uCloseness * land;
+          float k = 1.6 * uCloseness;
           slope.xy += vec2(n0 - nx, n0 - ny) * k;
-          day *= 1.0 + (n0 - 0.5) * 0.10 * uCloseness * land;
+          albedo *= 1.0 + (n0 - 0.5) * 0.10 * uCloseness;
         }
       #endif
 
       vec3 Np = normalize(TBN * normalize(slope));
 
-      float ndl = dot(Np, L);        // shading uses the bumped normal
-      float ndlGeo = dot(N, L);      // day/night split uses the true sphere normal
-      float lit = smoothstep(-0.16, 0.26, ndlGeo);
+      float mu0 = dot(Np, L);           // shading uses the bumped normal
+      float mu = max(dot(Np, V), 0.0);
+      float geo = dot(N, L);            // the day/night split is a sphere fact
 
-      // cloud shadow, displaced away from the sun across the surface
-      vec2 sunUv = normalize(vec2(dot(L, Tn), dot(L, Bn)) + 1e-6);
-      vec2 cloudUv = vec2(vUv.x + uCloudOffset, vUv.y);
-      float cl = texture2D(uClouds, cloudUv).r;
-      float clShadow = texture2D(uClouds, cloudUv - sunUv * 0.0032).r;
+      // ── Lommel-Seeliger, which is why a full Moon looks like a disc ──────
+      // Lambert would fall off as cos and paint a bright centre inside a dark
+      // rim. Regolith does not do that: light scatters back out along the way
+      // it came in, so the limb stays as bright as the middle right up to the
+      // edge. Dividing by (mu0 + mu) is the whole trick — it cancels the cosine
+      // the geometry keeps putting back.
+      float m0 = max(mu0, 0.0);
+      float ls = m0 / max(m0 + mu, 1e-3);
 
-      // ── how much sunlight survives the atmosphere on the way down ────────
-      // This is what actually reddens ground near the terminator: the direct
-      // beam has lost its blue to the long slant path before it lands.
-      vec3 sunT = vec3(0.0);
-      float lRay, lMie, lOzo;
-      if (sunOpticalDepth(vWorld + N * 1e-4, L, lRay, lMie, lOzo)) {
-        sunT = exp(-(BETA_RAY * lRay + BETA_MIE * 1.1 * lMie + BETA_OZO * lOzo));
-      }
+      // Opposition surge: shadows hide behind the grains that cast them when
+      // the sun is at your back, so the full Moon is far brighter than twice
+      // the half Moon. Narrow lobe, large amplitude — that is the real shape.
+      float phase = max(dot(L, V), 0.0);
+      float surge = 1.0 + 0.85 * pow(phase, 24.0);
 
-      // ── surface ──────────────────────────────────────────────────────────
-      vec3 albedo = day;
-      // deepen the open ocean a touch so it doesn't read flat grey-blue
-      albedo = mix(albedo, albedo * vec3(0.72, 0.86, 1.12), ocean * 0.55);
+      // A hard terminator, because there is no air to carry light past it. The
+      // softening left is the sun's own half-degree disc — wide enough that the
+      // relief does not alias into a staircase along the shadow line.
+      float shadow = smoothstep(-0.05, 0.10, mu0) * smoothstep(-0.05, 0.09, geo);
 
-      float diffuse = clamp(ndl, 0.0, 1.0);
-      // skylight: the ground is also lit by the blue hemisphere above it, which
-      // is why shadowed slopes on the day side are blue rather than black
-      vec3 sky = vec3(0.13, 0.22, 0.42) * lit * 0.20;
-      vec3 surface = albedo * (0.022 + sky + 1.15 * diffuse * sunT);
-      surface *= 1.0 - clShadow * 0.42 * lit;
+      // uSunI is irradiance E; a surface radiance is E/PI times the scattering
+      // law, the same convention the satellite's lighting uses. The 2.0 undoes
+      // the 1/(mu0+mu) normalisation at the sub-solar point, so the disc centre
+      // lands where Lambert would put it and the law only redistributes light
+      // outward toward the limb.
+      // sunlight is not pure white, and the balance above took the warmth out of
+      // the ground, so put it back where it belongs — in the light
+      const vec3 SUNLIGHT = vec3(1.0, 0.978, 0.945);
+      vec3 sunlit = albedo * SUNLIGHT * (uSunI / PI) * 2.0 * ls * surge * shadow;
 
-      // ── sun glint: microfacet water, blocked by cloud ────────────────────
-      // A perfectly smooth sphere gives a pinpoint mirror. Real sea state
-      // smears the glint into the elongated sheen you see from orbit — but
-      // that belongs in the roughness field, not in a normal map. Perturbing
-      // the normal per pixel is what fills the ocean with crawling speckle:
-      // neighbouring fragments flip in and out of a very tight specular lobe
-      // and there is nothing to average them. Widening and narrowing the lobe
-      // instead varies the glint the same way, at a spatial frequency the
-      // framebuffer can resolve — and it is the more honest model, because
-      // roughness *is* the distribution of wave facets too small to see.
-      float rough = 0.115;
-      #if WAVES
-        if (ocean > 0.02) {
-          float sea = fbm(normalize(vWorld) * 9.0 + vec3(0.0, uTime * 0.006, 0.0), 3);
-          rough = mix(0.085, 0.21, sea);
-        }
-      #endif
-      vec3 H = normalize(L + V);
-      float ndh = max(dot(N, H), 0.0);
-      float ndv = max(dot(N, V), 0.0);
-      float ndlW = max(dot(N, L), 0.0);
-      float fres = 0.02 + 0.98 * pow(1.0 - max(dot(V, H), 0.0), 5.0);
-      float vis = 0.25 / max(ndv * (1.0 - rough) + rough, 1e-3);
-      // the ceiling is a firefly guard: at grazing angles the fresnel term and
-      // the visibility term climb together and a few pixels can spike hard
-      // enough to smear across the frame once bloom gets hold of them
-      float glint = min(D_GGX(ndh, rough) * fres * vis * ndlW, 25.0);
-      vec3 spec = vec3(glint) * ocean * lit * (1.0 - cl * 0.85) * sunT * 1.7;
+      // ── earthshine ───────────────────────────────────────────────────────
+      // The night side is not black: it is lit by a half-lit Earth four times
+      // the width of the Sun in that sky. Cool, dim, and it falls on the face
+      // pointing away from the sun — the "old Moon in the new Moon's arms".
+      float nightMask = smoothstep(0.12, -0.35, geo);
+      // Earth is 40x brighter in that sky than a full Moon is in ours, which
+      // still leaves the unlit side dimmer than the darkest mare in sunlight —
+      // if it reads brighter than the seas, the number is wrong.
+      vec3 earthshine = albedo * vec3(0.030, 0.041, 0.066) * nightMask;
 
-      // ── city lights, deep night only, dimmed under cloud ─────────────────
-      float nightMask = smoothstep(0.08, -0.22, ndlGeo);
-      vec3 city = night * vec3(1.0, 0.80, 0.52) * 2.9 * nightMask * (1.0 - cl * 0.55);
-
-      vec3 color = surface + spec + city;
-
-      // ── aerial perspective ───────────────────────────────────────────────
-      // The atmosphere between the camera and this pixel, integrated properly:
-      // ground loses contrast and gains blue with distance, hardest at the limb
-      // where the sight line runs through the most air. This replaces the old
-      // fresnel rim entirely — that faked the symptom, this is the cause.
-      vec3 rd = normalize(vWorld - cameraPosition);
-      float tFar = length(vWorld - cameraPosition);
-      vec2 slab = raySphere(cameraPosition, rd, R_TOP);
-      float tNear = max(slab.x, 0.0);
-      if (slab.x <= slab.y && tFar > tNear) {
-        vec3 insc, trans;
-        scatter(cameraPosition, rd, tNear, tFar, L, uSunI, insc, trans);
-        color = color * trans + insc;
-      }
+      vec3 color = sunlit + earthshine;
 
       gl_FragColor = vec4(color, 1.0);
       #include <tonemapping_fragment>
@@ -619,185 +582,37 @@ const earthMat = new THREE.ShaderMaterial({
     }`,
 });
 
-const earth = new THREE.Mesh(
-  new THREE.SphereGeometry(EARTH_R, Q.earthSegments[0], Q.earthSegments[1]),
-  earthMat,
+/* One place to move the sun, because four things read it: the shader, the key
+   light the satellite is shaded by, the sprite you can actually see, and the
+   solar-wing tracking. */
+function setSun(v) {
+  sunDir.copy(v).normalize();
+  sunLight.position.copy(sunDir).multiplyScalar(60);
+  sunSprite.position.copy(sunDir).multiplyScalar(2600);
+  moonMat.uniforms.uSun.value.copy(sunDir);
+}
+
+/* The globe itself is the Blender model: a UV sphere carrying its crater field
+   as baked displacement, so the limb breaks against the starfield instead of
+   drawing a mathematically perfect circle. Until it lands there is a plain
+   sphere in its place — same radius, same UVs, so nothing downstream can tell
+   the difference and the scene never has a hole in it. */
+const moon = new THREE.Mesh(
+  new THREE.SphereGeometry(MOON_R, Q.moonSegments[0], Q.moonSegments[1]),
+  moonMat,
 );
-earthSpin.add(earth);
+moonSpin.add(moon);
 
-/* clouds on their own shell, drifting slightly faster than the ground */
-const cloudMat = new THREE.ShaderMaterial({
-  defines: {
-    ATMO_STEPS: Q.apSteps,
-    LIGHT_STEPS: Q.apLightSteps,
-    DETAIL: Q.surfaceDetail ? 1 : 0,
-    DEPTH: Q.cloudDepth ? 1 : 0,
-  },
-  uniforms: {
-    uClouds: { value: cloudMap },
-    uSun: { value: SUN_DIR.clone() },
-    uSunI: { value: SUN_INTENSITY },
-    uTexel: { value: new THREE.Vector2(1 / 2048, 1 / 1024) },
-    uCloseness: { value: 0 },
-  },
-  transparent: true,
-  depthWrite: false,
-  vertexShader: /* glsl */`
-    varying vec2 vUv; varying vec3 vN; varying vec3 vWorld;
-    void main() {
-      vUv = uv;
-      vN = normalize(mat3(modelMatrix) * normal);
-      vec4 wp = modelMatrix * vec4(position, 1.0);
-      vWorld = wp.xyz;
-      gl_Position = projectionMatrix * viewMatrix * wp;
-    }`,
-  fragmentShader: /* glsl */`
-    uniform sampler2D uClouds; uniform vec3 uSun; uniform vec2 uTexel;
-    uniform float uSunI, uCloseness;
-    varying vec2 vUv; varying vec3 vN; varying vec3 vWorld;
-    ${ATMOSPHERE_GLSL}
-    ${NOISE_GLSL}
-
-    void main() {
-      float d = texture2D(uClouds, vUv).r;
-
-      #if DETAIL
-        // The cloud map is 2048 wide, so edges go to mush well before the
-        // basemap does. Erode the density with high-frequency noise as the
-        // camera closes in: it gives the margins a wispy, torn edge instead of
-        // a soft blur, without inventing whole cloud systems that are not there.
-        if (uCloseness > 0.005) {
-          float w = fbm(normalize(vWorld) * 420.0, 4);
-          d = mix(d, d * (0.55 + 0.9 * w), uCloseness * 0.75);
-        }
-      #endif
-
-      float a = smoothstep(0.13, 0.66, d);
-      if (a < 0.004) discard;
-
-      vec3 N = normalize(vN);
-      vec3 L = normalize(uSun);
-      vec3 V = normalize(cameraPosition - vWorld);
-      float ndl = dot(N, L);
-      float lit = smoothstep(-0.20, 0.32, ndl);
-
-      // Fake thickness: sample the density field toward the sun. Where cloud sits
-      // sunward of this fragment it is self-shadowed, which gives the tops relief
-      // instead of a flat white sheet.
-      vec3 T = normalize(cross(vec3(0.0, 1.0, 0.0), N));
-      vec3 B = cross(N, T);
-      vec2 sunUv = normalize(vec2(dot(L, T), dot(L, B)) + 1e-6);
-
-      #if DEPTH
-        // Four taps stepping sunward instead of one. A single sample only knows
-        // whether its immediate neighbour is cloudy; marching a short way gives
-        // the tops actual depth ordering, so banks stack rather than flatten.
-        float occ = 0.0;
-        for (int i = 1; i <= 4; i++) {
-          float t = float(i) * 0.0022;
-          occ += max(texture2D(uClouds, vUv + sunUv * t).r - d, 0.0) / float(i);
-        }
-        float selfShade = 1.0 - clamp(occ * 0.85, 0.0, 0.62);
-      #else
-        float toward = texture2D(uClouds, vUv + sunUv * 0.0026).r;
-        float selfShade = 1.0 - clamp((toward - d) * 1.5, 0.0, 0.55);
-      #endif
-
-      // sunlight reaching cloud-top altitude, reddened near the terminator by
-      // the same optical-depth march the ground uses
-      vec3 sunT = vec3(0.0);
-      float lRay, lMie, lOzo;
-      if (sunOpticalDepth(vWorld, L, lRay, lMie, lOzo)) {
-        sunT = exp(-(BETA_RAY * lRay + BETA_MIE * 1.1 * lMie + BETA_OZO * lOzo));
-      }
-
-      vec3 sunlit = vec3(1.0, 0.985, 0.96) * selfShade * (0.25 + 0.9 * sunT);
-      vec3 col = mix(vec3(0.015, 0.022, 0.038), sunlit, lit);
-
-      // fade the shell at the silhouette so it doesn't ring the planet
-      float edge = smoothstep(0.0, 0.30, dot(N, V));
-
-      // aerial perspective over the cloud tops too, or they float in front of a
-      // hazed planet looking unnaturally crisp at the limb
-      vec3 rd = normalize(vWorld - cameraPosition);
-      float tFar = length(vWorld - cameraPosition);
-      vec2 slab = raySphere(cameraPosition, rd, R_TOP);
-      float tNear = max(slab.x, 0.0);
-      if (slab.x <= slab.y && tFar > tNear) {
-        vec3 insc, trans;
-        scatter(cameraPosition, rd, tNear, tFar, L, uSunI, insc, trans);
-        col = col * trans + insc * a;
-      }
-
-      gl_FragColor = vec4(col, a * (0.16 + 0.84 * lit) * edge);
-      #include <tonemapping_fragment>
-      #include <colorspace_fragment>
-    }`,
+new GLTFLoader(manager).load('assets/moon.glb', (gltf) => {
+  let geo = null;
+  gltf.scene.traverse((o) => { if (!geo && o.isMesh) geo = o.geometry; });
+  if (!geo) return;
+  moon.geometry.dispose();
+  moon.geometry = geo;
 });
-const clouds = new THREE.Mesh(
-  new THREE.SphereGeometry(CLOUD_R, Q.cloudSegments[0], Q.cloudSegments[1]),
-  cloudMat,
-);
-earthSpin.add(clouds);
-
-/* Atmosphere: a back-facing shell carrying the full scattering march.
-
-   The shell only ever draws the halo *outside* the disc — where the sight line
-   would hit the planet, the earth shader has already accounted for the same air
-   as aerial perspective, so drawing here too would double-count it. The explicit
-   ground test below is what enforces that; depth rejection alone would not,
-   because the back face of the shell sits behind the planet either way. */
-const atmoMat = new THREE.ShaderMaterial({
-  defines: { ATMO_STEPS: Q.atmoSteps, LIGHT_STEPS: Q.lightSteps },
-  uniforms: {
-    uSun: { value: SUN_DIR.clone() },
-    uSunI: { value: SUN_INTENSITY },
-  },
-  side: THREE.BackSide,
-  transparent: true,
-  depthWrite: false,
-  blending: THREE.AdditiveBlending,
-  vertexShader: /* glsl */`
-    varying vec3 vWorld;
-    void main() {
-      vec4 wp = modelMatrix * vec4(position, 1.0);
-      vWorld = wp.xyz;
-      gl_Position = projectionMatrix * viewMatrix * wp;
-    }`,
-  fragmentShader: /* glsl */`
-    uniform vec3 uSun; uniform float uSunI;
-    varying vec3 vWorld;
-    ${ATMOSPHERE_GLSL}
-
-    void main() {
-      vec3 ro = cameraPosition;
-      vec3 rd = normalize(vWorld - ro);
-      vec3 L = normalize(uSun);
-
-      vec2 slab = raySphere(ro, rd, R_TOP);
-      if (slab.x > slab.y) discard;                       // ray misses the atmosphere
-
-      vec2 ground = raySphere(ro, rd, R_GROUND);
-      if (ground.x <= ground.y && ground.y > 0.0) discard; // the surface pass owns this pixel
-
-      vec3 insc, trans;
-      scatter(ro, rd, max(slab.x, 0.0), slab.y, L, uSunI, insc, trans);
-
-      gl_FragColor = vec4(insc, 1.0);
-      #include <tonemapping_fragment>
-      #include <colorspace_fragment>
-    }`,
-});
-const atmosphere = new THREE.Mesh(
-  new THREE.SphereGeometry(ATMO_R, Q.atmoSegments[0], Q.atmoSegments[1]),
-  atmoMat,
-);
-// The shell is a pure world-space raymarch keyed off the camera, so it must not
-// inherit the axial tilt — it lives on the scene, not inside the tilted group.
-scene.add(atmosphere);
 
 /* lat/lon -> world position (geo.js does the maths, three.js gets the vector) */
-function latLonToVec3(lat, lon, radius = EARTH_R) {
+function latLonToVec3(lat, lon, radius = MOON_R) {
   const p = latLonXYZ(lat, lon, radius);
   return new THREE.Vector3(p.x, p.y, p.z);
 }
@@ -838,7 +653,7 @@ new GLTFLoader(manager).load('assets/satellite.glb', (gltf) => {
 const _z = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3();
 const _basis = new THREE.Matrix4();
 function aimSatellite(position, orbitNormal) {
-  _z.copy(position).negate().normalize();               // dish -> earth centre
+  _z.copy(position).negate().normalize();               // dish -> moon centre
   _x.copy(orbitNormal).normalize();
   _x.sub(_z.clone().multiplyScalar(_x.dot(_z))).normalize();   // orthogonalise
   _y.crossVectors(_z, _x).normalize();
@@ -877,7 +692,7 @@ const mastMat = new THREE.MeshBasicMaterial({
 
 const marker = new THREE.Group();
 marker.visible = false;
-earthSpin.add(marker);
+moonSpin.add(marker);
 
 // a thin footprint on the ground — this one *should* foreshorten, because it
 // says "this is a patch of surface" and perspective is how you read that
@@ -902,7 +717,7 @@ marker.add(mast);
    Drawn in the shader instead of built from geometry: the arms stay one crisp
    antialiased width at every scale, and it is a single quad rather than eight
    slivers. It lives on the scene, not under the marker, so billboarding does
-   not have to undo the earth's rotation first. */
+   not have to undo the Moon's rotation first. */
 const DESIGNATOR_PX = 54;
 
 const designatorMat = new THREE.ShaderMaterial({
@@ -1046,6 +861,7 @@ const state = {
   slew: null,
   target: null,             // { lat, lon, name, localDir }
   camTween: null,
+  sunTween: null,           // the sun turning to bring a night target into morning
   hoverLatLon: null,
   satHovered: false,
   satScreen: { x: 0, y: 0 },   // where the craft last projected to, in CSS px
@@ -1058,7 +874,7 @@ const state = {
 const raycaster = new THREE.Raycaster();
 
 /* Hover picking goes against this, not against the globe mesh — see updatePointer. */
-const EARTH_SPHERE = new THREE.Sphere(new THREE.Vector3(0, 0, 0), EARTH_R);
+const MOON_SPHERE = new THREE.Sphere(new THREE.Vector3(0, 0, 0), MOON_R);
 const _hitPoint = new THREE.Vector3();
 
 function orbitPosition(angle) {
@@ -1094,8 +910,8 @@ function satellitePick(clientX, clientY) {
   // The craft orbits at 1.46 R, so it spends a good part of every revolution
   // genuinely behind the planet. The old raycast happily picked it through the
   // globe — intersectObject only ever tested the craft, never what was in front
-  // of it — so the tooltip appeared over empty ocean.
-  const blocker = new THREE.Ray(camera.position, _toSat).intersectSphere(EARTH_SPHERE, _occl);
+  // of it — so the tooltip appeared over empty space beside the limb.
+  const blocker = new THREE.Ray(camera.position, _toSat).intersectSphere(MOON_SPHERE, _occl);
   if (blocker && camera.position.distanceTo(_occl) < dist) return false;
 
   _satProj.copy(satAnchor.position).project(camera);
@@ -1174,13 +990,16 @@ addEventListener('keydown', (e) => {
   }
 });
 
-/* Keep the orbit launcher aligned with the SPARC city catalog. The dashboard
-   adds country codes and boundary/coverage state; the orbit remains a compact
-   name-only launcher and passes the place name to the local gazetteer. */
+/* A launcher, not the catalogue: the marquee sites, the two poles anyone is
+   actually planning to land at, and enough far side to make the point that the
+   craft can be tasked round the back. The tag is what kind of place it is, so
+   the row reads without hovering. */
 const QUICK = [
-  ['Nagpur', 'IN'], ['Bengaluru', 'IN'], ['Mumbai', 'IN'], ['Delhi', 'IN'],
-  ['Chennai', 'IN'], ['Bhopal', 'IN'], ['New York', 'US'], ['Washington DC', 'US'],
-  ['Tokyo', 'JP'], ['London', 'GB'], ['Cairo', 'EG'], ['Sydney', 'AU'], ['Rio de Janeiro', 'BR'], ['Reykjavik', 'IS'],
+  ['Tranquility Base', 'A11'], ['Tycho', 'CRATER'], ['Copernicus', 'CRATER'],
+  ['Mare Imbrium', 'MARE'], ['Oceanus Procellarum', 'MARE'], ['Plato', 'CRATER'],
+  ['Aristarchus', 'CRATER'], ['Hadley-Apennine', 'A15'], ['Taurus-Littrow', 'A17'],
+  ['Shackleton', 'POLE'], ['Shiv Shakti Point', 'CH-3'], ['Korolev', 'FAR'],
+  ['Tsiolkovskiy', 'FAR'], ['Rupes Recta', 'SCARP'],
 ];
 $('chips').innerHTML = QUICK.map(([name, code]) => `<button type="button" data-place="${name}">${name}<small>${code}</small></button>`).join('');
 $('chips').addEventListener('click', (e) => {
@@ -1195,7 +1014,7 @@ function renderSuggestions(q) {
     const i = p.name.toLowerCase().indexOf(q.trim().toLowerCase());
     const marked = i < 0 ? p.name
       : `${p.name.slice(0, i)}<em>${p.name.slice(i, i + q.trim().length)}</em>${p.name.slice(i + q.trim().length)}`;
-    return `<li data-lat="${p.lat}" data-lon="${p.lon}" data-name="${p.name}">${marked}, ${p.country}<span>${fmtLat(p.lat)} ${fmtLon(p.lon)}</span></li>`;
+    return `<li data-lat="${p.lat}" data-lon="${p.lon}" data-name="${p.name}">${marked}, ${p.region}<span>${fmtLat(p.lat)} ${fmtLon(p.lon)}</span></li>`;
   }).join('');
 }
 queryEl.addEventListener('input', () => renderSuggestions(queryEl.value));
@@ -1215,7 +1034,7 @@ function submit() {
   const parsed = parseQuery(raw);
   if (!parsed) {
     const err = $('console-error');
-    err.textContent = `No match for "${raw}". Try a city name, or coordinates like 35.68, 139.69`;
+    err.textContent = `No match for "${raw}". Try a feature name, or coordinates like -43.3, -11.4`;
     err.hidden = false;
     return;
   }
@@ -1262,7 +1081,7 @@ const INDICATOR_COLOUR = {
    geometry) is drawn dashed and dimmer, so it cannot pass for a surveyed
    boundary. */
 const districtGroup = new THREE.Group();
-earthSpin.add(districtGroup);
+moonSpin.add(districtGroup);
 
 function clearDistrict() {
   for (const child of districtGroup.children) {
@@ -1277,7 +1096,7 @@ function drawDistrict({ rings, approximate, colour, intensity }) {
   if (!rings?.length || !rings[0]?.length) return;
 
   const hex = colour ?? MARK;
-  const lift = EARTH_R + Q.displacement + 0.0016;   // clear the displaced terrain
+  const lift = MOON_R + RELIEF + 0.0016;            // clear the crater rims
 
   // Triangulate in lon/lat, then lift every vertex onto the sphere. ShapeGeometry
   // does the earcut for us, holes included.
@@ -1335,9 +1154,9 @@ function goTo(lat, lon, name, { instant = false } = {}) {
   state.target = { lat, lon, name, localDir };
 
   // Clear the *displaced* surface, not the sphere. At 1.002 the ring sat below
-  // the peaks — terrain is pushed out by up to Q.displacement — so high ground
+  // the peaks — rims stand up to RELIEF above the datum — so high ground
   // near the target sliced the ring into a crescent.
-  marker.position.copy(localDir).multiplyScalar(EARTH_R + Q.displacement + 0.0015);
+  marker.position.copy(localDir).multiplyScalar(MOON_R + RELIEF + 0.0015);
   marker.lookAt(marker.position.clone().multiplyScalar(2));
   marker.visible = true;
   acquiredAt = performance.now();
@@ -1347,6 +1166,8 @@ function goTo(lat, lon, name, { instant = false } = {}) {
   const to = localDir.clone().applyQuaternion(worldSpinQuat());
   const camDir = to.clone();
   const dist = clamp(camera.position.length(), 1.9, 3.1);
+
+  turnSunOnto(to, instant);
 
   if (instant) {
     // shared links arrive already on target rather than flying in from the default view
@@ -1371,6 +1192,7 @@ function releaseTarget() {
   state.target = null;
   state.mode = 'orbit';
   state.slew = null;
+  state.sunTween = null;
   marker.visible = false;
   beam.visible = false;
   designator.visible = false;
@@ -1378,10 +1200,10 @@ function releaseTarget() {
   $('hint').innerHTML = 'Drag to orbit · scroll to zoom · <b>click the satellite</b> to target a location';
 }
 
-/* quaternion taking earth-local directions into world space */
+/* quaternion taking surface-local directions into world space */
 function worldSpinQuat() {
-  earthSpin.updateWorldMatrix(true, false);
-  return new THREE.Quaternion().setFromRotationMatrix(earthSpin.matrixWorld);
+  moonSpin.updateWorldMatrix(true, false);
+  return new THREE.Quaternion().setFromRotationMatrix(moonSpin.matrixWorld);
 }
 
 /* ── resize ─────────────────────────────────────────────────────────────── */
@@ -1407,25 +1229,64 @@ const tmpV = new THREE.Vector3();
 const _UP = new THREE.Vector3(0, 1, 0);
 const AXIS = new THREE.Vector3(0, 1, 0).applyAxisAngle(new THREE.Vector3(0, 0, 1), AXIAL_TILT);
 
+/* Bring the sun round to light a target that is currently in shadow.
+
+   A real orbiter does not carry a lamp: it waits for local morning, and over a
+   lunar day the terminator sweeps the whole surface. That wait is what this
+   compresses — the sun only ever rotates about the same axis the surface turns
+   on, so every position it moves to is one the target genuinely passes through.
+
+   Rotating a vector about AXIS traces a cone, so the reachable dot(sun, target)
+   runs from A-B to A+B where A is the product of the two axial components and B
+   the product of the perpendicular ones. Solve for the angle that lands on a
+   low morning sun: high enough to light the ground, low enough that the relief
+   still throws shadows worth looking at. */
+const LIT_ENOUGH = 0.12;          // below this the target is in night or deep dusk
+const MORNING = 0.62;             // cos of the sun angle we aim for, about 52 degrees
+
+function sunAngleOnto(target) {
+  const sa = sunDir.dot(AXIS), ta = target.dot(AXIS);
+  const sPerp = sunDir.clone().addScaledVector(AXIS, -sa);
+  const tPerp = target.clone().addScaledVector(AXIS, -ta);
+  const A = sa * ta;
+  const B = sPerp.length() * tPerp.length();
+  if (B < 1e-4) return 0;                       // target on the axis: nothing to gain
+
+  const want = clamp(MORNING, A - B + 1e-4, A + B - 1e-4);
+  // current azimuth between the two perpendicular parts, signed about AXIS
+  const cross = new THREE.Vector3().crossVectors(sPerp, tPerp);
+  const phi = Math.atan2(cross.dot(AXIS) * -1, sPerp.dot(tPerp));
+  const goal = Math.acos(clamp((want - A) / B, -1, 1));
+  // two solutions, +goal and -goal; take whichever is the shorter turn
+  const options = [goal - phi, -goal - phi].map((t) => ((t + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  return Math.abs(options[0]) <= Math.abs(options[1]) ? options[0] : options[1];
+}
+
+function turnSunOnto(target, instant) {
+  if (sunDir.dot(target) >= LIT_ENOUGH) return;   // already daylight there
+  const angle = sunAngleOnto(target);
+  if (Math.abs(angle) < 0.02) return;
+  const to = sunDir.clone().applyAxisAngle(AXIS, angle);
+  if (instant) { setSun(to); state.sunTween = null; return; }
+  state.sunTween = { from: sunDir.clone(), axis: AXIS.clone(), angle, t: 0, dur: CAM_DUR * 1.15 };
+}
+
 function tick(timestamp) {
   requestAnimationFrame(tick);
   timer.update(timestamp);
   const dt = Math.min(timer.getDelta(), 0.05);
   const t = timer.getElapsed();
 
-  /* earth + clouds */
+  /* surface */
   const spinDelta = SPIN * dt;
-  earthSpin.rotation.y += spinDelta;
-  clouds.rotation.y += spinDelta * 0.28;
-  earthMat.uniforms.uCloudOffset.value = (clouds.rotation.y - earthSpin.rotation.y) / (Math.PI * 2);
-  earthMat.uniforms.uTime.value = t;
+  moonSpin.rotation.y += spinDelta;
+  moonMat.uniforms.uTime.value = t;
 
-  /* Procedural surface and cloud detail fades in as the camera closes, standing
-     in for basemap resolution we do not have. Computed here rather than in the
-     shader so the branch is uniform across the whole frame. */
+  /* Procedural regolith detail fades in as the camera closes, standing in for
+     basemap resolution we do not have. Computed here rather than in the shader
+     so the branch is uniform across the whole frame. */
   const closeness = 1 - clamp((camera.position.length() - 1.5) / 1.4, 0, 1);
-  earthMat.uniforms.uCloseness.value = closeness;
-  cloudMat.uniforms.uCloseness.value = closeness;
+  moonMat.uniforms.uCloseness.value = closeness;
   // grain is dithering, not an effect — it must not crawl for reduced-motion readers
   gradePass.uniforms.uTime.value = REDUCED ? 0 : t;
 
@@ -1456,8 +1317,16 @@ function tick(timestamp) {
   if (satellite && wingAxle) {
     satellite.updateWorldMatrix(true, false);
     const inv = new THREE.Matrix4().copy(satellite.matrixWorld).invert();
-    const sunLocal = SUN_DIR.clone().transformDirection(inv);
+    const sunLocal = sunDir.clone().transformDirection(inv);
     wingAxle.rotation.x = Math.atan2(sunLocal.z, sunLocal.y);
+  }
+
+  /* sun tween after targeting, so the target is in daylight when we arrive */
+  if (state.sunTween) {
+    const s = state.sunTween;
+    s.t = Math.min(1, s.t + dt / s.dur);
+    setSun(s.from.clone().applyAxisAngle(s.axis, s.angle * easeInOut(s.t)));
+    if (s.t >= 1) state.sunTween = null;
   }
 
   /* camera tween after targeting */
@@ -1544,7 +1413,7 @@ function tick(timestamp) {
   if (now - fpsAcc >= 500) {
     $('tel-fps').textContent = Math.min(999, Math.round((fpsFrames * 1000) / (now - fpsAcc)));
     fpsAcc = now; fpsFrames = 0;
-    const altKm = Math.round((camera.position.length() - EARTH_R) * 6371);
+    const altKm = Math.round((camera.position.length() - MOON_R) * 1737);
     $('tel-alt').textContent = `${altKm.toLocaleString()} km`;
   }
 
@@ -1599,10 +1468,10 @@ function updatePointer() {
   // that fires at input rate. The analytic solution is O(1) and strictly more
   // accurate anyway: it reports the true surface rather than the nearest facet,
   // so the readout no longer quantises as the tessellation coarsens.
-  const hit = satHit ? null : raycaster.ray.intersectSphere(EARTH_SPHERE, _hitPoint);
+  const hit = satHit ? null : raycaster.ray.intersectSphere(MOON_SPHERE, _hitPoint);
   const readout = $('cursor-readout');
   if (hit) {
-    const local = earthSpin.worldToLocal(_hitPoint.clone());
+    const local = moonSpin.worldToLocal(_hitPoint.clone());
     const { lat, lon } = vec3ToLatLon(local);
     state.hoverLatLon = { lat, lon };
 
@@ -1610,7 +1479,7 @@ function updatePointer() {
     readout.style.left = `${state.clientX}px`;
     readout.style.top = `${state.clientY}px`;
     $('cursor-coords').textContent = `${fmtLat(lat)}  ${fmtLon(lon)}`;
-    $('cursor-place').textContent = describeLocation(lat, lon, isWater(lat, lon));
+    $('cursor-place').textContent = describeLocation(lat, lon, isMare(lat, lon));
     $('tel-lat').textContent = fmtLat(lat);
     $('tel-lon').textContent = fmtLon(lon);
 
@@ -1656,7 +1525,7 @@ manager.onLoad = () => { bootedAt(); applyDeepLink(); };
 // expose a little surface for the smoke test
 window.__orbital = {
   state, latLonToVec3, vec3ToLatLon, parseQuery, PLACES, THREE,
-  describeLocation, isWater,
+  describeLocation, isMare,
   scene, camera, controls, satAnchor, marker, beam, designator, goTo, releaseTarget,
   get satellite() { return satellite; },
 };

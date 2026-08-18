@@ -1,187 +1,126 @@
-/* Offline gazetteer.
+/* Offline selenographic gazetteer.
    Everything resolves locally - no geocoding service, so the page works with no
    network and there is nothing to rate-limit or fail mid-interaction.
 
-   `r` is how far out the name still describes where you are, in km. Cities take
-   CITY_KM below — metropolitan scale — and only the wide natural features carry
-   their own extent. Beyond that radius the reverse lookup reports a bearing and
-   a distance rather than the name, because 400 km off the coast is not Kolkata. */
+   Coordinates are selenographic: latitude north of the lunar equator, longitude
+   east of the prime meridian, which is the point that faces Earth. Anything
+   past |90| is on the far side and never rises over an Earth horizon.
 
-export const CITY_KM = 55;
+   `r` is how far out the name still describes where you are, in km. Craters and
+   landing sites take FEATURE_KM below; the maria carry their own extent because
+   Oceanus Procellarum is 2,500 km across and calling its middle "Kepler" would
+   be absurd. Beyond that radius the reverse lookup reports a bearing and a
+   distance rather than the name. */
+
+export const FEATURE_KM = 60;
 
 export const PLACES = [
-  { name: 'Tokyo', country: 'Japan', lat: 35.6762, lon: 139.6503 },
-  { name: 'Delhi', country: 'India', lat: 28.6139, lon: 77.2090 },
-  { name: 'Mumbai City', country: 'India', lat: 18.980765, lon: 72.833804 },
-  { name: 'Bengaluru', country: 'India', lat: 12.9716, lon: 77.5946 },
-  // SPARC pilot district. The gazetteer is a world city list, so the one place
-  // the analytics actually cover was not findable from this search until now.
-  { name: 'Nagpur', country: 'India', lat: 21.1458, lon: 79.0882 },
-  { name: 'Kolkata', country: 'India', lat: 22.5726, lon: 88.3639 },
-  { name: 'Chennai', country: 'India', lat: 13.0827, lon: 80.2707 },
-  { name: 'Bhopal', country: 'India', lat: 23.2599, lon: 77.4126 },
-  { name: 'Hyderabad', country: 'India', lat: 17.3850, lon: 78.4867 },
-  { name: 'Pune', country: 'India', lat: 18.5204, lon: 73.8567 },
-  { name: 'Ahmedabad', country: 'India', lat: 23.0225, lon: 72.5714 },
-  { name: 'Jaipur', country: 'India', lat: 26.9124, lon: 75.7873 },
-  { name: 'Shanghai', country: 'China', lat: 31.2304, lon: 121.4737 },
-  { name: 'Beijing', country: 'China', lat: 39.9042, lon: 116.4074 },
-  { name: 'Shenzhen', country: 'China', lat: 22.5431, lon: 114.0579 },
-  { name: 'Guangzhou', country: 'China', lat: 23.1291, lon: 113.2644 },
-  { name: 'Chengdu', country: 'China', lat: 30.5728, lon: 104.0668 },
-  { name: 'Hong Kong', country: 'China', lat: 22.3193, lon: 114.1694 },
-  { name: 'Seoul', country: 'South Korea', lat: 37.5665, lon: 126.9780 },
-  { name: 'Osaka', country: 'Japan', lat: 34.6937, lon: 135.5023 },
-  { name: 'Taipei', country: 'Taiwan', lat: 25.0330, lon: 121.5654 },
-  { name: 'Manila', country: 'Philippines', lat: 14.5995, lon: 120.9842 },
-  { name: 'Jakarta', country: 'Indonesia', lat: -6.2088, lon: 106.8456 },
-  { name: 'Bangkok', country: 'Thailand', lat: 13.7563, lon: 100.5018 },
-  { name: 'Ho Chi Minh City', country: 'Vietnam', lat: 10.8231, lon: 106.6297 },
-  { name: 'Hanoi', country: 'Vietnam', lat: 21.0285, lon: 105.8542 },
-  { name: 'Kuala Lumpur', country: 'Malaysia', lat: 3.1390, lon: 101.6869 },
-  { name: 'Singapore', country: 'Singapore', lat: 1.3521, lon: 103.8198 },
-  { name: 'Dhaka', country: 'Bangladesh', lat: 23.8103, lon: 90.4125 },
-  { name: 'Karachi', country: 'Pakistan', lat: 24.8607, lon: 67.0011 },
-  { name: 'Lahore', country: 'Pakistan', lat: 31.5204, lon: 74.3587 },
-  { name: 'Islamabad', country: 'Pakistan', lat: 33.6844, lon: 73.0479 },
-  { name: 'Kathmandu', country: 'Nepal', lat: 27.7172, lon: 85.3240 },
-  { name: 'Colombo', country: 'Sri Lanka', lat: 6.9271, lon: 79.8612 },
-  { name: 'Tashkent', country: 'Uzbekistan', lat: 41.2995, lon: 69.2401 },
-  { name: 'Almaty', country: 'Kazakhstan', lat: 43.2220, lon: 76.8512 },
-  { name: 'Ulaanbaatar', country: 'Mongolia', lat: 47.8864, lon: 106.9057 },
-  { name: 'Tehran', country: 'Iran', lat: 35.6892, lon: 51.3890 },
-  { name: 'Baghdad', country: 'Iraq', lat: 33.3152, lon: 44.3661 },
-  { name: 'Riyadh', country: 'Saudi Arabia', lat: 24.7136, lon: 46.6753 },
-  { name: 'Dubai', country: 'UAE', lat: 25.2048, lon: 55.2708 },
-  { name: 'Doha', country: 'Qatar', lat: 25.2854, lon: 51.5310 },
-  { name: 'Jerusalem', country: 'Israel', lat: 31.7683, lon: 35.2137 },
-  { name: 'Istanbul', country: 'Turkiye', lat: 41.0082, lon: 28.9784 },
-  { name: 'Ankara', country: 'Turkiye', lat: 39.9334, lon: 32.8597 },
+  /* ── maria: the basalt seas, and the reason the near side has a face ──── */
+  { name: 'Mare Tranquillitatis', region: 'mare · near side', lat: 8.5, lon: 31.4, r: 440 },
+  { name: 'Mare Serenitatis', region: 'mare · near side', lat: 28.0, lon: 17.5, r: 350 },
+  { name: 'Mare Imbrium', region: 'mare · near side', lat: 32.8, lon: -15.6, r: 570 },
+  { name: 'Oceanus Procellarum', region: 'mare · near side', lat: 18.4, lon: -57.4, r: 1000 },
+  { name: 'Mare Crisium', region: 'mare · near side', lat: 17.0, lon: 59.1, r: 270 },
+  { name: 'Mare Fecunditatis', region: 'mare · near side', lat: -7.8, lon: 51.3, r: 460 },
+  { name: 'Mare Nectaris', region: 'mare · near side', lat: -15.2, lon: 35.5, r: 170 },
+  { name: 'Mare Nubium', region: 'mare · near side', lat: -21.3, lon: -16.6, r: 350 },
+  { name: 'Mare Humorum', region: 'mare · near side', lat: -24.4, lon: -38.6, r: 210 },
+  { name: 'Mare Frigoris', region: 'mare · near side', lat: 56.0, lon: 1.4, r: 700 },
+  { name: 'Mare Vaporum', region: 'mare · near side', lat: 13.3, lon: 3.6, r: 120 },
+  { name: 'Mare Smythii', region: 'mare · limb', lat: 1.3, lon: 87.5, r: 190 },
+  { name: 'Mare Australe', region: 'mare · limb', lat: -38.9, lon: 93.0, r: 300 },
+  { name: 'Mare Orientale', region: 'mare · limb', lat: -19.4, lon: -92.8, r: 320 },
+  { name: 'Mare Moscoviense', region: 'mare · far side', lat: 27.3, lon: 147.9, r: 140 },
+  { name: 'Mare Ingenii', region: 'mare · far side', lat: -33.7, lon: 163.5, r: 160 },
+  { name: 'Sinus Iridum', region: 'bay · near side', lat: 44.1, lon: -31.5, r: 120 },
+  { name: 'Sinus Medii', region: 'bay · near side', lat: 2.4, lon: 1.7, r: 90 },
+  { name: 'Lacus Somniorum', region: 'lake · near side', lat: 38.0, lon: 29.2, r: 130 },
+  { name: 'Palus Putredinis', region: 'marsh · near side', lat: 26.5, lon: 0.4, r: 90 },
 
-  { name: 'London', country: 'United Kingdom', lat: 51.5074, lon: -0.1278 },
-  { name: 'Edinburgh', country: 'United Kingdom', lat: 55.9533, lon: -3.1883 },
-  { name: 'Dublin', country: 'Ireland', lat: 53.3498, lon: -6.2603 },
-  { name: 'Paris', country: 'France', lat: 48.8566, lon: 2.3522 },
-  { name: 'Madrid', country: 'Spain', lat: 40.4168, lon: -3.7038 },
-  { name: 'Barcelona', country: 'Spain', lat: 41.3851, lon: 2.1734 },
-  { name: 'Lisbon', country: 'Portugal', lat: 38.7223, lon: -9.1393 },
-  { name: 'Rome', country: 'Italy', lat: 41.9028, lon: 12.4964 },
-  { name: 'Milan', country: 'Italy', lat: 45.4642, lon: 9.1900 },
-  { name: 'Berlin', country: 'Germany', lat: 52.5200, lon: 13.4050 },
-  { name: 'Munich', country: 'Germany', lat: 48.1351, lon: 11.5820 },
-  { name: 'Amsterdam', country: 'Netherlands', lat: 52.3676, lon: 4.9041 },
-  { name: 'Brussels', country: 'Belgium', lat: 50.8503, lon: 4.3517 },
-  { name: 'Zurich', country: 'Switzerland', lat: 47.3769, lon: 8.5417 },
-  { name: 'Vienna', country: 'Austria', lat: 48.2082, lon: 16.3738 },
-  { name: 'Prague', country: 'Czechia', lat: 50.0755, lon: 14.4378 },
-  { name: 'Warsaw', country: 'Poland', lat: 52.2297, lon: 21.0122 },
-  { name: 'Budapest', country: 'Hungary', lat: 47.4979, lon: 19.0402 },
-  { name: 'Athens', country: 'Greece', lat: 37.9838, lon: 23.7275 },
-  { name: 'Stockholm', country: 'Sweden', lat: 59.3293, lon: 18.0686 },
-  { name: 'Oslo', country: 'Norway', lat: 59.9139, lon: 10.7522 },
-  { name: 'Copenhagen', country: 'Denmark', lat: 55.6761, lon: 12.5683 },
-  { name: 'Helsinki', country: 'Finland', lat: 60.1699, lon: 24.9384 },
-  { name: 'Reykjavik', country: 'Iceland', lat: 64.1466, lon: -21.9426 },
-  { name: 'Moscow', country: 'Russia', lat: 55.7558, lon: 37.6173 },
-  { name: 'Saint Petersburg', country: 'Russia', lat: 59.9311, lon: 30.3609 },
-  { name: 'Novosibirsk', country: 'Russia', lat: 55.0084, lon: 82.9357 },
-  { name: 'Vladivostok', country: 'Russia', lat: 43.1332, lon: 131.9113 },
-  { name: 'Kyiv', country: 'Ukraine', lat: 50.4501, lon: 30.5234 },
-  { name: 'Bucharest', country: 'Romania', lat: 44.4268, lon: 26.1025 },
+  /* ── craters, near side ────────────────────────────────────────────────── */
+  { name: 'Tycho', region: 'crater · near side', lat: -43.3, lon: -11.4, r: 85 },
+  { name: 'Copernicus', region: 'crater · near side', lat: 9.6, lon: -20.1, r: 90 },
+  { name: 'Kepler', region: 'crater · near side', lat: 8.1, lon: -38.0 },
+  { name: 'Aristarchus', region: 'crater · near side', lat: 23.7, lon: -47.4 },
+  { name: 'Plato', region: 'crater · near side', lat: 51.6, lon: -9.4, r: 80 },
+  { name: 'Clavius', region: 'crater · near side', lat: -58.4, lon: -14.4, r: 130 },
+  { name: 'Grimaldi', region: 'crater · limb', lat: -5.5, lon: -68.3, r: 110 },
+  { name: 'Gassendi', region: 'crater · near side', lat: -17.6, lon: -40.1, r: 75 },
+  { name: 'Theophilus', region: 'crater · near side', lat: -11.4, lon: 26.4, r: 75 },
+  { name: 'Petavius', region: 'crater · near side', lat: -25.3, lon: 60.4, r: 110 },
+  { name: 'Langrenus', region: 'crater · near side', lat: -8.9, lon: 61.1, r: 85 },
+  { name: 'Archimedes', region: 'crater · near side', lat: 29.7, lon: -4.0, r: 70 },
+  { name: 'Eratosthenes', region: 'crater · near side', lat: 14.5, lon: -11.3 },
+  { name: 'Ptolemaeus', region: 'crater · near side', lat: -9.2, lon: -1.8, r: 100 },
+  { name: 'Alphonsus', region: 'crater · near side', lat: -13.7, lon: -3.2, r: 80 },
+  { name: 'Arzachel', region: 'crater · near side', lat: -18.2, lon: -1.9, r: 70 },
+  { name: 'Hipparchus', region: 'crater · near side', lat: -5.5, lon: 4.8, r: 95 },
+  { name: 'Albategnius', region: 'crater · near side', lat: -11.2, lon: 4.1, r: 85 },
+  { name: 'Aristoteles', region: 'crater · near side', lat: 50.2, lon: 17.4, r: 70 },
+  { name: 'Eudoxus', region: 'crater · near side', lat: 44.3, lon: 16.3 },
+  { name: 'Posidonius', region: 'crater · near side', lat: 31.8, lon: 29.9, r: 70 },
+  { name: 'Fracastorius', region: 'crater · near side', lat: -21.5, lon: 33.2, r: 80 },
+  { name: 'Maurolycus', region: 'crater · near side', lat: -42.0, lon: 14.0, r: 80 },
+  { name: 'Stofler', region: 'crater · near side', lat: -41.1, lon: 6.0, r: 85 },
+  { name: 'Schickard', region: 'crater · limb', lat: -44.3, lon: -55.3, r: 130 },
+  { name: 'Bailly', region: 'crater · limb', lat: -66.5, lon: -69.1, r: 170 },
+  { name: 'Humboldt', region: 'crater · limb', lat: -27.0, lon: 80.9, r: 120 },
 
-  { name: 'Cairo', country: 'Egypt', lat: 30.0444, lon: 31.2357 },
-  { name: 'Lagos', country: 'Nigeria', lat: 6.5244, lon: 3.3792 },
-  { name: 'Kinshasa', country: 'DR Congo', lat: -4.4419, lon: 15.2663 },
-  { name: 'Nairobi', country: 'Kenya', lat: -1.2921, lon: 36.8219 },
-  { name: 'Addis Ababa', country: 'Ethiopia', lat: 9.0250, lon: 38.7469 },
-  { name: 'Johannesburg', country: 'South Africa', lat: -26.2041, lon: 28.0473 },
-  { name: 'Cape Town', country: 'South Africa', lat: -33.9249, lon: 18.4241 },
-  { name: 'Casablanca', country: 'Morocco', lat: 33.5731, lon: -7.5898 },
-  { name: 'Marrakesh', country: 'Morocco', lat: 31.6295, lon: -7.9811 },
-  { name: 'Algiers', country: 'Algeria', lat: 36.7538, lon: 3.0588 },
-  { name: 'Tunis', country: 'Tunisia', lat: 36.8065, lon: 10.1815 },
-  { name: 'Accra', country: 'Ghana', lat: 5.6037, lon: -0.1870 },
-  { name: 'Dakar', country: 'Senegal', lat: 14.7167, lon: -17.4677 },
-  { name: 'Khartoum', country: 'Sudan', lat: 15.5007, lon: 32.5599 },
-  { name: 'Dar es Salaam', country: 'Tanzania', lat: -6.7924, lon: 39.2083 },
-  { name: 'Luanda', country: 'Angola', lat: -8.8390, lon: 13.2894 },
-  { name: 'Antananarivo', country: 'Madagascar', lat: -18.8792, lon: 47.5079 },
+  /* ── far side, which nobody saw at all until Luna 3 in 1959 ───────────── */
+  { name: 'Tsiolkovskiy', region: 'crater · far side', lat: -20.4, lon: 129.1, r: 110 },
+  { name: 'Korolev', region: 'basin · far side', lat: -4.0, lon: 157.4, r: 240 },
+  { name: 'Hertzsprung', region: 'basin · far side', lat: 1.4, lon: -128.7, r: 300 },
+  { name: 'Apollo', region: 'basin · far side', lat: -36.1, lon: -151.8, r: 260 },
+  { name: 'Aitken', region: 'crater · far side', lat: -16.8, lon: 173.4, r: 90 },
+  { name: 'Daedalus', region: 'crater · far side', lat: -5.9, lon: 179.4 },
+  { name: 'Jackson', region: 'crater · far side', lat: 22.4, lon: -163.1, r: 70 },
+  { name: 'Van de Graaff', region: 'crater · far side', lat: -27.4, lon: 172.2, r: 90 },
+  { name: 'South Pole-Aitken', region: 'basin · far side', lat: -53.0, lon: -169.0, r: 1200 },
 
-  { name: 'New York', country: 'United States', lat: 40.7128, lon: -74.0060 },
-  { name: 'Los Angeles', country: 'United States', lat: 34.0522, lon: -118.2437 },
-  { name: 'Chicago', country: 'United States', lat: 41.8781, lon: -87.6298 },
-  { name: 'San Francisco', country: 'United States', lat: 37.7749, lon: -122.4194 },
-  { name: 'Seattle', country: 'United States', lat: 47.6062, lon: -122.3321 },
-  { name: 'Denver', country: 'United States', lat: 39.7392, lon: -104.9903 },
-  { name: 'Houston', country: 'United States', lat: 29.7604, lon: -95.3698 },
-  { name: 'Miami', country: 'United States', lat: 25.7617, lon: -80.1918 },
-  { name: 'Boston', country: 'United States', lat: 42.3601, lon: -71.0589 },
-  { name: 'Washington DC', country: 'United States', lat: 38.9072, lon: -77.0369 },
-  { name: 'Anchorage', country: 'United States', lat: 61.2181, lon: -149.9003 },
-  { name: 'Honolulu', country: 'United States', lat: 21.3069, lon: -157.8583 },
-  { name: 'Toronto', country: 'Canada', lat: 43.6532, lon: -79.3832 },
-  { name: 'Vancouver', country: 'Canada', lat: 49.2827, lon: -123.1207 },
-  { name: 'Montreal', country: 'Canada', lat: 45.5017, lon: -73.5673 },
-  { name: 'Mexico City', country: 'Mexico', lat: 19.4326, lon: -99.1332 },
-  { name: 'Guadalajara', country: 'Mexico', lat: 20.6597, lon: -103.3496 },
-  { name: 'Havana', country: 'Cuba', lat: 23.1136, lon: -82.3666 },
-  { name: 'Panama City', country: 'Panama', lat: 8.9824, lon: -79.5199 },
-  { name: 'Bogota', country: 'Colombia', lat: 4.7110, lon: -74.0721 },
-  { name: 'Lima', country: 'Peru', lat: -12.0464, lon: -77.0428 },
-  { name: 'Quito', country: 'Ecuador', lat: -0.1807, lon: -78.4678 },
-  { name: 'Santiago', country: 'Chile', lat: -33.4489, lon: -70.6693 },
-  { name: 'Buenos Aires', country: 'Argentina', lat: -34.6037, lon: -58.3816 },
-  { name: 'Montevideo', country: 'Uruguay', lat: -34.9011, lon: -56.1645 },
-  { name: 'Sao Paulo', country: 'Brazil', lat: -23.5505, lon: -46.6333 },
-  { name: 'Rio de Janeiro', country: 'Brazil', lat: -22.9068, lon: -43.1729 },
-  { name: 'Brasilia', country: 'Brazil', lat: -15.7939, lon: -47.8828 },
-  { name: 'Manaus', country: 'Brazil', lat: -3.1190, lon: -60.0217 },
-  { name: 'La Paz', country: 'Bolivia', lat: -16.4897, lon: -68.1193 },
-  { name: 'Caracas', country: 'Venezuela', lat: 10.4806, lon: -66.9036 },
+  /* ── poles: those floors have not seen the sun in two billion years ───── */
+  { name: 'Shackleton', region: 'crater · south pole', lat: -89.9, lon: 0.0, r: 45 },
+  { name: 'Peary', region: 'crater · north pole', lat: 88.6, lon: 33.0, r: 70 },
+  { name: 'Malapert', region: 'crater · south pole', lat: -84.9, lon: -12.9, r: 60 },
 
-  { name: 'Sydney', country: 'Australia', lat: -33.8688, lon: 151.2093 },
-  { name: 'Melbourne', country: 'Australia', lat: -37.8136, lon: 144.9631 },
-  { name: 'Brisbane', country: 'Australia', lat: -27.4698, lon: 153.0251 },
-  { name: 'Perth', country: 'Australia', lat: -31.9505, lon: 115.8605 },
-  { name: 'Darwin', country: 'Australia', lat: -12.4634, lon: 130.8456 },
-  { name: 'Auckland', country: 'New Zealand', lat: -36.8485, lon: 174.7633 },
-  { name: 'Wellington', country: 'New Zealand', lat: -41.2866, lon: 174.7756 },
-  { name: 'Suva', country: 'Fiji', lat: -18.1248, lon: 178.4501 },
-  { name: 'Port Moresby', country: 'Papua New Guinea', lat: -9.4438, lon: 147.1803 },
+  /* ── highlands relief ──────────────────────────────────────────────────── */
+  { name: 'Montes Apenninus', region: 'range · near side', lat: 18.9, lon: -3.7, r: 300 },
+  { name: 'Montes Caucasus', region: 'range · near side', lat: 38.4, lon: 10.0, r: 200 },
+  { name: 'Montes Alpes', region: 'range · near side', lat: 46.4, lon: -0.8, r: 200 },
+  { name: 'Vallis Alpes', region: 'valley · near side', lat: 48.5, lon: 3.2, r: 90 },
+  { name: 'Rupes Recta', region: 'scarp · near side', lat: -22.1, lon: -7.8, r: 60 },
+  { name: 'Mons Huygens', region: 'peak · near side', lat: 19.9, lon: -2.9, r: 40 },
+  { name: 'Marius Hills', region: 'domes · near side', lat: 12.5, lon: -54.0, r: 90 },
 
-  // Settlements and summits are points; the rest are regions, and a region that
-  // took the city radius would report "820 km NE of Sahara Desert" from inside
-  // the Sahara. These extents are deliberately conservative — a name that only
-  // covers the middle of its feature is a smaller error than one that spills
-  // past the edge onto something else.
-  { name: 'McMurdo Station', country: 'Antarctica', lat: -77.8419, lon: 166.6863, r: 40 },
-  { name: 'Longyearbyen', country: 'Svalbard', lat: 78.2232, lon: 15.6267, r: 30 },
-  { name: 'Nuuk', country: 'Greenland', lat: 64.1836, lon: -51.7214, r: 30 },
-  { name: 'Mount Everest', country: 'Nepal/China', lat: 27.9881, lon: 86.9250, r: 25 },
-  { name: 'Kilimanjaro', country: 'Tanzania', lat: -3.0674, lon: 37.3556, r: 30 },
-  { name: 'Grand Canyon', country: 'United States', lat: 36.1069, lon: -112.1129, r: 80 },
-  { name: 'Great Barrier Reef', country: 'Australia', lat: -18.2871, lon: 147.6992, r: 350 },
-  { name: 'Amazon Basin', country: 'Brazil', lat: -3.4653, lon: -62.2159, r: 700 },
-  { name: 'Sahara Desert', country: 'Africa', lat: 23.4162, lon: 25.6628, r: 900 },
-  // The oceanic pole of inaccessibility. Being nowhere near anything is the
-  // whole point of it, so it is the one entry that earns a wide radius.
-  { name: 'Point Nemo', country: 'Pacific Ocean', lat: -48.8767, lon: -123.3933, r: 800 },
+  /* ── where the hardware is ─────────────────────────────────────────────── */
+  { name: 'Tranquility Base', region: 'landing site · Apollo 11', lat: 0.674, lon: 23.473, r: 30 },
+  { name: 'Statio Cognitum', region: 'landing site · Apollo 12', lat: -3.012, lon: -23.422, r: 30 },
+  { name: 'Fra Mauro', region: 'landing site · Apollo 14', lat: -3.645, lon: -17.472, r: 30 },
+  { name: 'Hadley-Apennine', region: 'landing site · Apollo 15', lat: 26.132, lon: 3.634, r: 30 },
+  { name: 'Descartes Highlands', region: 'landing site · Apollo 16', lat: -8.973, lon: 15.501, r: 30 },
+  { name: 'Taurus-Littrow', region: 'landing site · Apollo 17', lat: 20.191, lon: 30.772, r: 30 },
+  { name: 'Luna 9', region: 'landing site · 1966', lat: 7.08, lon: -64.37, r: 25 },
+  { name: 'Luna 16', region: 'landing site · 1970', lat: -0.68, lon: 56.30, r: 25 },
+  { name: 'Lunokhod 1', region: 'rover · Luna 17', lat: 38.24, lon: -35.00, r: 25 },
+  { name: 'Surveyor 1', region: 'landing site · 1966', lat: -2.47, lon: -43.34, r: 25 },
+  { name: 'Chang’e 4', region: 'landing site · far side', lat: -45.44, lon: 177.60, r: 30 },
+  { name: 'Chang’e 5', region: 'landing site · 2020', lat: 43.06, lon: -51.92, r: 30 },
+  { name: 'Shiv Shakti Point', region: 'landing site · Chandrayaan-3', lat: -69.37, lon: 32.32, r: 30 },
+  { name: 'Luna 2 impact', region: 'impact site · 1959', lat: 29.1, lon: 0.0, r: 25 },
 ];
 
-/* substring match, ranked: exact > prefix > contained, shorter names first */
 export function findPlaces(query, limit = 6) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const scored = [];
   for (const p of PLACES) {
     const name = p.name.toLowerCase();
-    const country = p.country.toLowerCase();
+    const region = p.region.toLowerCase();
     let score;
     if (name === q) score = 0;
     else if (name.startsWith(q)) score = 1;
     else if (name.includes(q)) score = 2;
-    else if (country.startsWith(q)) score = 3;
-    else if (country.includes(q)) score = 4;
+    else if (region.startsWith(q)) score = 3;
+    else if (region.includes(q)) score = 4;
     else continue;
     scored.push({ p, score: score * 1000 + p.name.length });
   }
@@ -190,7 +129,7 @@ export function findPlaces(query, limit = 6) {
 }
 
 const toRad = Math.PI / 180;
-const R_KM = 6371;
+const R_KM = 1737.4;      // lunar mean radius
 
 /* great-circle distance, km */
 export function haversine(lat1, lon1, lat2, lon2) {
@@ -230,7 +169,7 @@ export function nearestPlaceInfo(lat, lon) {
 export function nearestPlace(lat, lon, maxKm) {
   const n = nearestPlaceInfo(lat, lon);
   if (!n) return null;
-  const limit = maxKm ?? n.place.r ?? CITY_KM;
+  const limit = maxKm ?? n.place.r ?? FEATURE_KM;
   return n.km <= limit ? n.place.name : null;
 }
 
@@ -238,24 +177,25 @@ const fmtKm = (km) => (km < 10
   ? `${km.toFixed(1)} km`
   : `${Math.round(km).toLocaleString('en-US')} km`);
 
-/* Past this there is no useful relationship left to state, and "3,180 km SW of
-   Honolulu" is just a long way of saying you are in the middle of the Pacific. */
-const RELATIVE_KM = 1200;
+/* Past this there is no useful relationship left to state. The Moon is a
+   quarter of Earth's width, so 400 km is already a long way across the disc,
+   and "900 km SW of Tycho" says nothing the coordinates do not. */
+const RELATIVE_KM = 400;
 
 /* One line describing where a coordinate is, for the hover readout.
 
-   Every branch has to survive being read off the screen and checked on a map,
-   which rules out both of the old behaviours: naming a city you are 400 km from
-   and calling unknown ground open water. `water` comes from the mask —
-   true, false, or null while it is still decoding — and null simply drops the
-   sea/land clause rather than guessing at it. */
-export function describeLocation(lat, lon, water = null) {
+   Every branch has to survive being read off the screen and checked against the
+   map, which rules out naming a crater you are 400 km from. `mare` comes from
+   the mask - true, false, or null while it is still decoding - and null simply
+   drops the terrain clause rather than guessing at it. */
+export function describeLocation(lat, lon, mare = null) {
   const n = nearestPlaceInfo(lat, lon);
-  if (!n) return water === true ? 'open water' : '—';
+  if (!n) return mare === true ? 'mare basalt' : '—';
 
-  if (n.km <= (n.place.r ?? CITY_KM)) return n.place.name;
+  if (n.km <= (n.place.r ?? FEATURE_KM)) return n.place.name;
 
   const rel = `${fmtKm(n.km)} ${n.from} of ${n.place.name}`;
-  if (water !== true) return rel;
-  return n.km <= RELATIVE_KM ? `open water · ${rel}` : 'open water';
+  if (mare === null) return rel;
+  const terrain = mare ? 'mare basalt' : 'highlands';
+  return n.km <= RELATIVE_KM ? `${terrain} · ${rel}` : terrain;
 }

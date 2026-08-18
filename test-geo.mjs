@@ -1,7 +1,7 @@
 /* Node smoke test for the coordinate + query logic.  node test-geo.mjs  */
 
 import { latLonToVec3, vec3ToLatLon, parseQuery, fmtLat, fmtLon } from './geo.js';
-import { PLACES, findPlaces, nearestPlace, nearestPlaceInfo, describeLocation, haversine, bearing, CITY_KM } from './places.js';
+import { PLACES, findPlaces, nearestPlace, nearestPlaceInfo, describeLocation, haversine, bearing, FEATURE_KM } from './places.js';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -40,9 +40,9 @@ ok('space pair', (() => { const r = parseQuery('-33.87 151.21'); return r && nea
 ok('negative both', (() => { const r = parseQuery('-22.9068, -43.1729'); return r && near(r.lat, -22.9068); })());
 ok('lat out of range', parseQuery('120, 30') === null);
 ok('lon out of range', parseQuery('30, 200') === null);
-ok('names custom target', (() => { const r = parseQuery('0, 0'); return r && r.name === 'Custom target'; })());
-ok('names nearby city', (() => { const r = parseQuery('35.68, 139.70'); return r && r.name === 'Tokyo'; })(),
-   JSON.stringify(parseQuery('35.68, 139.70')));
+ok('names custom target', (() => { const r = parseQuery('70, -150'); return r && r.name === 'Custom target'; })());
+ok('names nearby feature', (() => { const r = parseQuery('-43.3, -11.4'); return r && r.name === 'Tycho'; })(),
+   JSON.stringify(parseQuery('-43.3, -11.4')));
 
 console.log('DMS parsing');
 ok('london dms', (() => {
@@ -63,73 +63,73 @@ ok('south/west negative', (() => {
 })());
 
 console.log('place name lookup');
-ok('exact', parseQuery('Tokyo')?.name === 'Tokyo');
-ok('case insensitive', parseQuery('tOkYo')?.name === 'Tokyo');
-ok('prefix', parseQuery('San Fran')?.name === 'San Francisco');
-ok('multiword', parseQuery('New York')?.name === 'New York');
+ok('exact', parseQuery('Tycho')?.name === 'Tycho');
+ok('case insensitive', parseQuery('tYcHo')?.name === 'Tycho');
+ok('prefix', parseQuery('Mare Tran')?.name === 'Mare Tranquillitatis');
+ok('multiword', parseQuery('Rupes Recta')?.name === 'Rupes Recta');
 ok('unknown -> null', parseQuery('Zzzzqqq') === null);
 ok('empty -> null', parseQuery('') === null);
 ok('whitespace -> null', parseQuery('   ') === null);
 ok('null-safe', parseQuery(null) === null);
 
 console.log('suggestion ranking');
-ok('exact ranks first', findPlaces('Delhi', 5)[0].name === 'Delhi');
-ok('prefix beats contains', findPlaces('Man', 5)[0].name === 'Manila',
-   findPlaces('Man', 5).map((p) => p.name).join(','));
+ok('exact ranks first', findPlaces('Tycho', 5)[0].name === 'Tycho');
+ok('prefix beats contains', findPlaces('Tra', 5)[0].name === 'Tranquility Base',
+   findPlaces('Tra', 5).map((p) => p.name).join(','));
 ok('limit respected', findPlaces('a', 4).length <= 4);
 ok('no query -> empty', findPlaces('', 5).length === 0);
 
 console.log('reverse lookup');
-ok('on a city', nearestPlace(35.68, 139.70) === 'Tokyo');
-ok('mid-ocean is null', nearestPlace(-30, -140) === null, String(nearestPlace(-30, -140)));
+ok('on a crater', nearestPlace(-43.3, -11.4) === 'Tycho');
+ok('empty highland is null', nearestPlace(70, -150) === null, String(nearestPlace(70, -150)));
 ok('antimeridian safe', typeof nearestPlace(0, 179.9) !== 'undefined');
 
-// The bug this file exists to keep out: the reticle sat in the Bay of Bengal,
-// 400 km off the coast, and the readout said KOLKATA — the old blanket 550 km
-// radius reached that far out to sea.
+// The bug this file exists to keep out: a blanket claim radius that reaches
+// hundreds of km past the feature, so the readout names a crater the reticle is
+// nowhere near. On a body a quarter of Earth's width that error covers four
+// times as much of the disc, so the radii matter more here, not less.
 console.log('reverse lookup does not over-claim');
-ok('bay of bengal is not Kolkata', nearestPlace(18.97, 88.02) === null,
-   String(nearestPlace(18.97, 88.02)));
-ok('every place claims at most its own radius', PLACES.every((p) => (p.r ?? CITY_KM) <= 900));
+ok('400 km off Tycho is not Tycho', nearestPlace(-30.0, -11.4) === null,
+   String(nearestPlace(-30.0, -11.4)));
+ok('every place claims at most its own radius', PLACES.every((p) => (p.r ?? FEATURE_KM) <= 1200));
 ok('a place still claims its own centre', PLACES.every((p) => nearestPlace(p.lat, p.lon) !== null),
    PLACES.filter((p) => nearestPlace(p.lat, p.lon) === null).map((p) => p.name).join(','));
-ok('40 km out still reads as the city', nearestPlace(22.5726 + 0.36, 88.3639) === 'Kolkata',
-   String(nearestPlace(22.5726 + 0.36, 88.3639)));
-ok('regions keep their extent', nearestPlace(23.0, 22.0) === 'Sahara Desert',
-   String(nearestPlace(23.0, 22.0)));
+ok('40 km out still reads as the crater', nearestPlace(-43.3 + 1.3, -11.4) === 'Tycho',
+   String(nearestPlace(-43.3 + 1.3, -11.4)));
+ok('maria keep their extent', nearestPlace(23.4, -57.4) === 'Oceanus Procellarum',
+   String(nearestPlace(23.4, -57.4)));
 
 console.log('distance and bearing');
 ok('haversine zero', near(haversine(19, 88, 19, 88), 0, 1e-9));
-ok('haversine known leg', near(haversine(22.5726, 88.3639, 18.97, 88.02), 402, 3),
-   String(haversine(22.5726, 88.3639, 18.97, 88.02)));
+// 13.3 degrees of lunar arc, on a 1737.4 km radius
+ok('haversine known leg', near(haversine(-43.3, -11.4, -30.0, -11.4), 403, 3),
+   String(haversine(-43.3, -11.4, -30.0, -11.4)));
 ok('symmetric', near(haversine(35, 139, -33, 151), haversine(-33, 151, 35, 139), 1e-9));
 ok('due north', bearing(0, 0, 10, 0) === 'N', bearing(0, 0, 10, 0));
 ok('due south', bearing(0, 0, -10, 0) === 'S', bearing(0, 0, -10, 0));
 ok('due east', bearing(0, 0, 0, 10) === 'E', bearing(0, 0, 0, 10));
 ok('due west', bearing(0, 0, 0, -10) === 'W', bearing(0, 0, 0, -10));
-ok('bay of bengal is south of Kolkata', bearing(22.5726, 88.3639, 18.97, 88.02) === 'S',
-   bearing(22.5726, 88.3639, 18.97, 88.02));
+ok('due north of Tycho reads N', bearing(-43.3, -11.4, -30.0, -11.4) === 'N',
+   bearing(-43.3, -11.4, -30.0, -11.4));
 
 console.log('hover description');
-ok('on a city, just the name', describeLocation(22.5726, 88.3639, false) === 'Kolkata',
-   describeLocation(22.5726, 88.3639, false));
-ok('city wins over the water bit', describeLocation(22.5726, 88.3639, true) === 'Kolkata',
-   describeLocation(22.5726, 88.3639, true));
-ok('open water is relative, not named', describeLocation(18.97, 88.02, true) === 'open water · 402 km S of Kolkata',
-   describeLocation(18.97, 88.02, true));
-ok('land near nothing is still not water', !/water/.test(describeLocation(60, 100, false)),
-   describeLocation(60, 100, false));
-ok('unknown mask never claims water', !/water/.test(describeLocation(18.97, 88.02, null)),
-   describeLocation(18.97, 88.02, null));
-ok('deep ocean drops the relative fix', describeLocation(-30, -140, true) === 'open water',
-   describeLocation(-30, -140, true));
+ok('on a feature, just the name', describeLocation(-43.3, -11.4, false) === 'Tycho',
+   describeLocation(-43.3, -11.4, false));
+ok('the name wins over the terrain bit', describeLocation(8.5, 31.4, true) === 'Mare Tranquillitatis',
+   describeLocation(8.5, 31.4, true));
+ok('off-feature is relative, not named', describeLocation(-30.0, -11.4, false) === 'highlands · 259 km SSW of Rupes Recta',
+   describeLocation(-30.0, -11.4, false));
+ok('unknown mask never claims terrain', !/(mare|highlands)/.test(describeLocation(-30.0, -11.4, null)),
+   describeLocation(-30.0, -11.4, null));
+ok('far from anything drops the relative fix', describeLocation(70, -150, true) === 'mare basalt',
+   describeLocation(70, -150, true));
 ok('nearest info always resolves', nearestPlaceInfo(0, 0)?.place?.name?.length > 0);
 
 console.log('formatting');
 ok('north', fmtLat(51.5074) === '51.51°N');
-ok('south', fmtLat(-33.8688) === '33.87°S');
-ok('east', fmtLon(139.6503) === '139.65°E');
-ok('west', fmtLon(-0.1278) === '0.13°W');
+ok('south', fmtLat(-43.3) === '43.30°S');
+ok('east', fmtLon(31.4) === '31.40°E');
+ok('west', fmtLon(-11.4) === '11.40°W');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
