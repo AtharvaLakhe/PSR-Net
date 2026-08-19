@@ -35,7 +35,9 @@ http.createServer((req, res) => {
     return;
   }
 
-  const rel = pathname === '/' ? 'index.html' : pathname.replace(/^[/\\]+/, '');
+  // a directory request resolves to its index, so /psr/ works like /
+  const withIndex = pathname.endsWith('/') ? `${pathname}index.html` : pathname;
+  const rel = withIndex.replace(/^[/\\]+/, '') || 'index.html';
   const file = path.resolve(ROOT, rel);
 
   if (!file.startsWith(ROOT_PREFIX)) {    // no climbing out of the web root

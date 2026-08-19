@@ -29,15 +29,36 @@ instead of drawing a mathematically perfect circle.
 
 [kit]: https://svs.gsfc.nasa.gov/4720
 
+## Two things live here
+
+| Path | What it is |
+| --- | --- |
+| `/` | The orbital lunar terminal — the Moon in WebGL with a taskable comms satellite |
+| `/psr/` | **PSR-NET** — a scroll-driven paper on recovering terrain from permanently shadowed craters imaged by Chandrayaan-2 OHRC, with the whole enhancement pipeline running live in the browser |
+
 ## Run
 
+Needs [Node.js](https://nodejs.org) 18 or newer and a current browser. Nothing
+else — no Python, no build step, no accounts.
+
 ```bash
-npm install     # pulls three.js only
-npm run serve   # http://localhost:8123/
+git clone https://github.com/AtharvaLakhe/SnowWhite.git
+cd SnowWhite
+npm install     # three.js and gsap, the only two dependencies
+npm run serve
 ```
 
+Then open **http://localhost:8123/** for the orbital terminal, or
+**http://localhost:8123/psr/** for PSR-NET.
+
 It must be served over HTTP — the ES module import map will not resolve over
-`file://`.
+`file://`, so double-clicking `index.html` gives a blank page.
+
+`npm install` is the only step that touches the network. After it, the whole
+thing runs with the cable out: every texture, model and script is served from
+this repository or from `node_modules`.
+
+**Port already in use?** `PORT=3000 npm run serve`.
 
 ## Test
 
@@ -58,6 +79,8 @@ npm run test:e2e  # drives a real headless browser over CDP; needs the server ru
 | `places.js` | Selenographic gazetteer — maria, craters, landing sites |
 | `maremask.js` | Mare/highland classification, read off the LROC mosaic |
 | `server.mjs` | Minimal static file server |
+| `psr/` | PSR-NET: the scrollytelling page, its enhancement engine, and the renderer that generates its data |
+| `node_modules/gsap` | GSAP + ScrollTrigger + SplitText, imported by `psr/index.html`'s import map — no CDN, no bundler |
 | `assets/` | The Moon (model, colour, normals) and the satellite model |
 
 ## Lighting
@@ -96,3 +119,30 @@ With no host present, none of this fires and the globe simply stays on target.
 | Hover surface | Live lat/lon readout |
 | Click satellite | Open the targeting console |
 | `Esc` | Close the console |
+
+## PSR-NET
+
+`psr/` answers the *Enhancement of Permanently Shadowed Regions of Lunar Craters
+Captured by OHRC* problem statement. It is a single scroll-driven page that walks
+from the physics of a 1.54° obliquity down to a boulder-detection map, and the
+whole enhancement chain executes in the browser on real 12-bit data:
+
+```
+radiometric → destripe → guided denoise → multi-scale retinex
+           → Richardson–Lucy → CLAHE → LoG detection + ensemble stability
+```
+
+Every metric on the page — PSNR, SSIM, CNR, sharpness, and the ablation table —
+is computed live against a paired target, not quoted. `psr/render_scene.py`
+regenerates the data: a real LOLA south-pole PSR map by horizon marching, and a
+synthetic OHRC frame at 0.25 m/px pushed through a modelled sensor (shot noise,
+dark, read noise, PRNU, column pattern, TDI smear, 12-bit quantisation).
+
+```bash
+python psr/render_scene.py               # both scenes, needs numpy/scipy/pillow
+python psr/render_scene.py --frame-only  # just the OHRC frame
+```
+
+The trained network is specified on the page but its weights are not shipped, and
+the page says so where it matters. What runs is the deterministic operator chain
+the network is trained to approximate.
