@@ -1,5 +1,9 @@
 # SnowWhite — Orbital Lunar Observation Terminal
 
+**Live: [psr-net.vercel.app/psr/](https://psr-net.vercel.app/psr/)** — the PSR
+recovery story, with the trained network running in your browser.
+The orbital terminal is at [psr-net.vercel.app](https://psr-net.vercel.app/).
+
 The Moon at the centre of a deep starfield, rendered in WebGL, with a comms
 satellite in a tilted orbit. Drag to orbit, scroll to zoom, hover the surface
 for live selenographic coordinates, and click the satellite to task it — by

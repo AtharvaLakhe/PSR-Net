@@ -8,3 +8,5 @@ package-lock.json
 # committing node_modules itself.
 vendor/
 .vercel/
+.vercel
+.env*
