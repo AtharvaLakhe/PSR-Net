@@ -1,4 +1,18 @@
-* text=auto eol=lf
-*.jpg binary
-*.png binary
-*.glb binary
+# Normalise line endings in the repository; check out native on each platform.
+* text=auto
+
+# Binary assets must never be touched by EOL conversion.
+*.png  binary
+*.jpg  binary
+*.glb  binary
+*.onnx binary
+*.pt   binary
+*.npy  binary
+*.tif  binary
+*.wasm binary
+
+# Keep vendored copies and generated model files out of language statistics, so
+# the repository reports what was actually written here.
+vendor/**       linguist-vendored
+psr/model/**    linguist-generated
+docs/**         linguist-documentation

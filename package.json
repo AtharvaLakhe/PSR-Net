@@ -1,8 +1,33 @@
 {
-  "name": "snowwhite",
+  "name": "psr-net",
   "version": "1.0.0",
-  "description": "Orbital earth observation terminal - a WebGL Earth in a deep starfield with a satellite you can task",
+  "description": "Recovering terrain from permanently shadowed lunar craters imaged by Chandrayaan-2 OHRC: a scroll-driven explainer with the enhancement pipeline and a trained restoration network running in the browser.",
+  "keywords": [
+    "lunar",
+    "chandrayaan-2",
+    "ohrc",
+    "permanently-shadowed-regions",
+    "image-restoration",
+    "onnx",
+    "webgl",
+    "three-js",
+    "remote-sensing",
+    "planetary-science"
+  ],
+  "homepage": "https://psr-net.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AtharvaLakhe/SnowWhite.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AtharvaLakhe/SnowWhite/issues"
+  },
+  "author": "Atharva Lakhe",
+  "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "serve": "node server.mjs",
     "test": "node test-geo.mjs",
@@ -11,7 +36,6 @@
     "postinstall": "node scripts/vendor.mjs",
     "build": "node scripts/vendor.mjs"
   },
-  "license": "MIT",
   "dependencies": {
     "gsap": "^3.15.0",
     "onnxruntime-web": "^1.27.0",

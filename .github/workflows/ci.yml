@@ -1,0 +1,48 @@
+# Runs on every push and pull request.
+#
+# Vercel deploys this repository on its own, so this workflow does not deploy —
+# it checks. The coordinate maths and query parsing are pure Node and run in
+# seconds; the end-to-end suite drives a real headless browser against the
+# static server, which is what catches a broken import map or a shader that
+# fails to compile.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm install
+
+      # postinstall fills vendor/ from node_modules; if that silently failed the
+      # pages would 404 on three and gsap, so assert the tree exists
+      - name: Check the vendor tree was built
+        run: |
+          for f in vendor/three/build/three.module.js \
+                   vendor/gsap/index.js \
+                   vendor/ort/ort.wasm.bundle.min.mjs; do
+            test -f "$f" || { echo "::error::missing $f — scripts/vendor.mjs did not run"; exit 1; }
+          done
+
+      - name: Unit tests
+        run: npm test
+
+      - name: End-to-end
+        run: |
+          npm run serve &
+          npx --yes wait-on http://localhost:8123/ --timeout 60000
+          npm run test:e2e

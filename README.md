@@ -1,190 +1,196 @@
-# SnowWhite — Orbital Lunar Observation Terminal
+# PSR-NET
 
-**Live: [psr-net.vercel.app/psr/](https://psr-net.vercel.app/psr/)** — the PSR
-recovery story, with the trained network running in your browser.
-The orbital terminal is at [psr-net.vercel.app](https://psr-net.vercel.app/).
+**Recovering terrain from permanently shadowed lunar craters imaged by Chandrayaan-2 OHRC.**
 
-The Moon at the centre of a deep starfield, rendered in WebGL, with a comms
-satellite in a tilted orbit. Drag to orbit, scroll to zoom, hover the surface
-for live selenographic coordinates, and click the satellite to task it — by
-feature name or by latitude/longitude. The craft slews, locks on, and marks the
-target.
+[![CI](https://github.com/AtharvaLakhe/SnowWhite/actions/workflows/ci.yml/badge.svg)](https://github.com/AtharvaLakhe/SnowWhite/actions/workflows/ci.yml)
+[![Live](https://img.shields.io/badge/live-psr--net.vercel.app-ffb454)](https://psr-net.vercel.app/psr/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Standalone: no backend, no API keys, no build step. Everything it draws ships in
-this repository.
+**→ [psr-net.vercel.app/psr/](https://psr-net.vercel.app/psr/)**
 
-## The surface is the real Moon
+![The flight from lunar orbit down to a shadowed crater floor](docs/hero.png)
 
-Both maps come from NASA's [CGI Moon Kit][kit] (NASA/GSFC Scientific
-Visualization Studio, public domain), processed once offline and baked into the
-model in Blender:
+Near the lunar poles the Sun never rises more than a degree or two above the
+horizon, so any depression deep enough to hide behind its own rim has been dark
+for two billion years. Those floors are cold traps holding water ice, they sit
+inside Artemis candidate landing regions, and we have almost no pictures of the
+ground. What little light reaches them has scattered off a sunlit wall first —
+about a thousandth of what falls on the rim — so an OHRC frame of one is twelve
+digital numbers of signal sitting on the noise floor.
 
-| Asset | Source | What was done to it |
+This is a single page that explains the problem, runs the recovery in your
+browser, and shows its own numbers.
+
+---
+
+## What it does
+
+**A scroll-driven flight.** One continuous scrubbed WebGL path: a full Moon, the
+south pole turning toward you, the permanently shadowed regions igniting, the
+orbiter arriving, a target locked, the descent, a rover on the floor, and the
+frame it takes. Every position is a function of scroll, so it runs backwards
+just as well.
+
+**A pipeline you can audit.** Seven deterministic stages — radiometric
+correction, column destriping, guided denoise, multi-scale retinex,
+Richardson–Lucy deconvolution, clipped CLAHE, blob detection with an ensemble
+stability test — each running on the real 12-bit values, in the browser, with
+PSNR, SSIM and CNR measured live against a paired target.
+
+**A trained network.** PSR-Net, 714,401 parameters, exported to ONNX and run
+with onnxruntime-web on the same array the deterministic chain gets.
+
+![The trained network stage, with live metrics](docs/pipeline.png)
+
+---
+
+## Results
+
+Measured on 24 scenes held out of training, with fixed degradation seeds, both
+methods given identical input and scored after the same affine fit to the target:
+
+| Method | PSNR (dB) | SSIM |
 | --- | --- | --- |
-| `assets/moon_day.jpg` | LROC Wide Angle Camera global colour mosaic, 8192×4096 | white-balanced against its own warm average, then a mineral-colour saturation lift |
-| `assets/moon_norm.jpg` | LOLA laser-altimeter DEM, 16-bit half-metres | differentiated into a tangent-space normal map at 4096×2048, ×2 exaggeration |
-| `assets/moon.glb` | the same DEM | displaced into a 320×160 UV sphere in Blender and exported, ±10 km of real relief at ×1.8 |
+| Raw frame | 17.27 ± 1.45 | 0.257 |
+| Deterministic chain | 17.47 ± 1.39 | 0.272 |
+| **PSR-Net** | **20.28 ± 2.65** | **0.444** |
 
-A normal map rather than a height map because 8-bit heights quantise into
-terraces the moment you differentiate them, and every slope on this surface is a
-difference of two heights. The elevation still reaches the geometry — that is
-what `moon.glb` is for, and it is why the limb breaks against the starfield
-instead of drawing a mathematically perfect circle.
+Reproduce with `python psr/train/evaluate.py`.
 
-[kit]: https://svs.gsfc.nasa.gov/4720
+**Read that table honestly.** The +2.81 dB is measured on data from the same
+generator the network trained on. It shows the network inverts this calibrated
+degradation better than a fixed operator chain — held-out scenes, unseen noise
+seeds — but not that it works on real OHRC frames, because it has also learned
+the generator's terrain statistics. The deterministic chain stays in the product
+precisely because it assumes nothing about what the ground looks like. The
+deployment gate is injection-recovery on real frames, not this table.
 
-## Two things live here
+The chain's own +0.20 dB looks damning until you notice it moves CNR from 2.8 to
+4.0. PSNR cannot credit a deliberate non-linear tone change, which is exactly
+what retinex and CLAHE are for.
 
-| Path | What it is |
-| --- | --- |
-| `/` | The orbital lunar terminal — the Moon in WebGL with a taskable comms satellite |
-| `/psr/` | **PSR-NET** — a scroll-driven paper on recovering terrain from permanently shadowed craters imaged by Chandrayaan-2 OHRC, with the whole enhancement pipeline running live in the browser |
+---
 
-## Deploying
+## What is measured and what is modelled
 
-Vercel watches this repository: pushing to `main` deploys to production, and
-pushing a branch gets a preview URL. Nothing else to run.
+A reviewer's first question, answered before it is asked.
 
-The build runs `scripts/vendor.mjs`, which copies three, gsap and the ONNX
-runtime out of `node_modules` into `vendor/`. The import maps point at
-`/vendor`, so the same paths work locally and on a static host, where
-`node_modules` does not exist.
+| Element | Status | Source |
+| --- | --- | --- |
+| South-pole topography | **Measured** | LOLA gridded DEM, 16 px/deg, NASA/GSFC CGI Moon Kit |
+| PSR extent map | **Derived** | Horizon marching on that DEM from six azimuths at a 1.54° Sun |
+| OHRC parameters | **Published** | Mission instrument description: 0.25 m GSD, 64 TDI stages, 12-bit |
+| The 256 m crater-floor frame | **Synthetic** | No altimetry resolves 0.25 m. Craters on d⁻²·⁶, boulders on d⁻³ |
+| Illumination inside the PSR | **Modelled** | Single-bounce wall scattering, gated by sky visibility |
+| Sensor degradation | **Modelled** | Shot noise, dark, read noise, PRNU, column pattern, TDI smear, quantisation |
+| Every metric on the page | **Computed live** | In your browser, against the paired target |
 
-## The model
+There is no ground truth inside a permanently shadowed region — that is the
+whole problem. Nobody has photographed the floor of Shackleton in reflected
+sunlight, because there has never been any. So the pairs are built the way the
+published work builds them ([Bickel et al. 2021][bickel]): model the scene and
+the sensor precisely enough to generate exactly-paired examples, then learn the
+inverse of a degradation you defined.
 
-`psr/train` holds everything needed to reproduce PSR-Net, the network the page
-runs. It needs a CUDA GPU to be quick, but it will train on CPU given patience.
+[bickel]: https://www.nature.com/articles/s41467-021-25882-z
+
+---
+
+## Run it
+
+Needs [Node.js](https://nodejs.org) 18+ and a current browser. No Python, no
+build step, no accounts.
+
+```bash
+git clone https://github.com/AtharvaLakhe/SnowWhite.git
+cd SnowWhite
+npm install
+npm run serve
+```
+
+- **http://localhost:8123/psr/** — PSR-NET
+- **http://localhost:8123/** — the orbital lunar terminal
+
+It must be served over HTTP; the ES module import map will not resolve over
+`file://`. `PORT=3000 npm run serve` if 8123 is taken.
+
+`npm install` is the only step that touches the network. After it, everything
+runs offline — every texture, model and script is served from this repository.
+
+```bash
+npm test           # coordinate maths and query parsing
+npm run test:e2e   # drives a real headless browser; needs the server running
+```
+
+---
+
+## Training the model
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 pip install numpy scipy pillow scikit-image onnx onnxruntime
 
-python psr/train/synth.py 384        # cache the scene bank (~7 min, 386 MB)
-python psr/train/train.py            # 36k steps, ~3 h on an RTX 5050
-python psr/train/evaluate.py         # learned vs the deterministic chain
-python psr/train/export_onnx.py      # ONNX + numeric check, into psr/model
+python psr/train/synth.py 384     # cache the scene bank (~7 min, 386 MB)
+python psr/train/train.py         # 36k steps, ~2 h on an RTX 5050
+python psr/train/evaluate.py      # learned vs the deterministic chain
+python psr/train/export_onnx.py   # ONNX + numeric check, into psr/model
 ```
 
-The scenes are cached once; the *sensor* is re-randomised on every sample, with
-every parameter drawn from a range wider than OHRC's nominal figures. A model
-that only works at the nominal values has learned the simulator, not the
-inverse problem.
+Scenes are cached once; the **sensor is re-randomised on every sample**, with
+every parameter drawn from a range wider than OHRC's nominal figures — PSF
+0.55–1.9 px, read noise 16–44 e⁻, secondary illumination log-uniform across
+10⁻⁴–6×10⁻³. A model that only works at nominal values has learned the
+simulator, not the inverse problem.
 
 `export_onnx.py` refuses to write a model whose ONNX graph disagrees with the
-PyTorch one by more than 2e-3, because an ONNX file that loads is not an ONNX
+PyTorch one by more than 2×10⁻³, because an ONNX file that loads is not an ONNX
 file that agrees.
 
-The page loads `psr/model/psrnet.onnx` if it is there and states what it
-found — parameters, training step, held-out score, execution provider. With no
-weights present it says so and shows the deterministic chain alone.
+The 386 MB scene bank is not committed; it rebuilds in minutes. The trained
+checkpoint and the exported ONNX are, so you can present or verify without
+training anything.
 
-## Run
+---
 
-Needs [Node.js](https://nodejs.org) 18 or newer and a current browser. Nothing
-else — no Python, no build step, no accounts.
+## Layout
 
-```bash
-git clone https://github.com/AtharvaLakhe/SnowWhite.git
-cd SnowWhite
-npm install     # three.js and gsap, the only two dependencies
-npm run serve
-```
-
-Then open **http://localhost:8123/** for the orbital terminal, or
-**http://localhost:8123/psr/** for PSR-NET.
-
-It must be served over HTTP — the ES module import map will not resolve over
-`file://`, so double-clicking `index.html` gives a blank page.
-
-`npm install` is the only step that touches the network. After it, the whole
-thing runs with the cable out: every texture, model and script is served from
-this repository or from `node_modules`.
-
-**Port already in use?** `PORT=3000 npm run serve`.
-
-## Test
-
-```bash
-npm test          # coordinate maths + query parsing (node only)
-npm run test:e2e  # drives a real headless browser over CDP; needs the server running
-```
-
-## What's in here
-
-| File | Role |
+| Path | Role |
 | --- | --- |
-| `index.html` | Page shell and HUD markup |
-| `main.js` | Scene, camera, orbit controls, lunar surface shader, satellite, targeting |
-| `shaders.js` | Noise and colour-space GLSL chunks |
-| `quality.js` | Device-tier detection and quality presets |
-| `geo.js` | Lat/lon ↔ vector maths and query parsing |
-| `places.js` | Selenographic gazetteer — maria, craters, landing sites |
-| `maremask.js` | Mare/highland classification, read off the LROC mosaic |
-| `server.mjs` | Minimal static file server |
-| `psr/` | PSR-NET: the scrollytelling page, its enhancement engine, and the renderer that generates its data |
-| `node_modules/gsap` | GSAP + ScrollTrigger + SplitText, imported by `psr/index.html`'s import map — no CDN, no bundler |
-| `assets/` | The Moon (model, colour, normals) and the satellite model |
+| `psr/index.html` | The page: flight, pipeline, model, validation, provenance, lab |
+| `psr/journey.js` | The scroll-scrubbed WebGL flight, Moon to rover |
+| `psr/engine.js` | The enhancement operators and metrics, all of them |
+| `psr/net.js` | ONNX inference in the browser, with a graceful absent-weights path |
+| `psr/psr.js` | Scene orchestration, pipeline caching, the lab |
+| `psr/render_scene.py` | Generates the page's scenes from the LOLA DEM |
+| `psr/train/` | Scene synthesis, model, training, evaluation, export |
+| `psr/model/` | The shipped weights, their metadata and their benchmark |
+| `scripts/vendor.mjs` | Copies three, gsap and onnxruntime out of node_modules |
+| `assets/` | The Moon: displaced mesh, LROC colour, LOLA-derived normals |
+| `main.js`, `geo.js`, `places.js` | The orbital terminal at `/` |
 
-## Lighting
+---
 
-No atmosphere, so none of the Earth machinery survived: no halo at the limb, no
-aerial perspective, no blue in the shadows. What replaces it is the scattering
-law regolith actually obeys — Lommel-Seeliger, which keeps the limb as bright as
-the disc centre, plus the opposition surge that makes a full Moon far brighter
-than twice a half Moon. The terminator is hard, softened only by the width of
-the Sun's own disc, and the night side carries earthshine rather than black.
+## Deploying
 
-The sun sits about 50° off the camera axis rather than over your shoulder: a
-full Moon is the phase that shows the least, because nothing casts a shadow.
-Task a target on the night side and the sun rotates about the spin axis to bring
-it into local morning — the wait a real orbiter would have, compressed.
+Vercel watches this repository: pushing to `main` deploys to production, and any
+other branch gets a preview URL.
 
-## Embedding
+The build runs `scripts/vendor.mjs`, which copies three, gsap and the ONNX
+runtime out of `node_modules` into `vendor/`. The import maps point at
+`/vendor`, so the same paths work locally and on a static host, where
+`node_modules` does not exist. The site also sets `Cross-Origin-Opener-Policy`
+and `Cross-Origin-Embedder-Policy`, without which onnxruntime-web cannot use
+threads.
 
-The terminal answers *where*. If a host application wants to answer *what is
-there*, define `window.SPARC.open({ lat, lon, name })` before `main.js` loads —
-it is called once the satellite has finished its slew. The scene also listens for
-two optional events from a host:
+---
 
-- `sparc:district` — `{ rings, approximate, colour, intensity }` draws a boundary
-  on the surface
-- `sparc:indicator` — `{ indicatorId }` recolours the marker and beam
+## Credits
 
-With no host present, none of this fires and the globe simply stays on target.
+Lunar topography and imagery: **NASA/GSFC Scientific Visualization Studio**,
+[CGI Moon Kit][kit] — LOLA gridded DEM and the LROC WAC global mosaic. NASA data
+is not subject to copyright protection in the United States.
 
-## Controls
+Built for the *Enhancement of Permanently Shadowed Regions of Lunar Craters
+Captured by OHRC* problem statement. MIT licensed — see [LICENSE](LICENSE).
 
-| Input | Action |
-| --- | --- |
-| Drag | Orbit the camera |
-| Scroll | Zoom |
-| Hover surface | Live lat/lon readout |
-| Click satellite | Open the targeting console |
-| `Esc` | Close the console |
-
-## PSR-NET
-
-`psr/` answers the *Enhancement of Permanently Shadowed Regions of Lunar Craters
-Captured by OHRC* problem statement. It is a single scroll-driven page that walks
-from the physics of a 1.54° obliquity down to a boulder-detection map, and the
-whole enhancement chain executes in the browser on real 12-bit data:
-
-```
-radiometric → destripe → guided denoise → multi-scale retinex
-           → Richardson–Lucy → CLAHE → LoG detection + ensemble stability
-```
-
-Every metric on the page — PSNR, SSIM, CNR, sharpness, and the ablation table —
-is computed live against a paired target, not quoted. `psr/render_scene.py`
-regenerates the data: a real LOLA south-pole PSR map by horizon marching, and a
-synthetic OHRC frame at 0.25 m/px pushed through a modelled sensor (shot noise,
-dark, read noise, PRNU, column pattern, TDI smear, 12-bit quantisation).
-
-```bash
-python psr/render_scene.py               # both scenes, needs numpy/scipy/pillow
-python psr/render_scene.py --frame-only  # just the OHRC frame
-```
-
-The trained network is specified on the page but its weights are not shipped, and
-the page says so where it matters. What runs is the deterministic operator chain
-the network is trained to approximate.
+[kit]: https://svs.gsfc.nasa.gov/4720
