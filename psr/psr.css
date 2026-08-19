@@ -443,35 +443,6 @@ input[type=range] { width: 100%; accent-color: var(--sodium); }
 .trl li { margin-bottom: 12px; color: #bdb9b0; font-size: 15px; }
 .trl b { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--sodium); }
 
-/* ── faq ─────────────────────────────────────────────────────────────────── */
-.faq-search { display: flex; align-items: center; gap: 14px; margin: 26px 0 8px; }
-#faq-q {
-  flex: 1; max-width: 460px; padding: 12px 14px; background: var(--slate);
-  border: 1px solid var(--rule); color: var(--regolith);
-  font-family: var(--mono); font-size: 13px; border-radius: 2px;
-}
-#faq-q::placeholder { color: var(--faint); }
-#faq-count { font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: .1em; }
-
-.faq-list { margin-top: 18px; column-count: 2; column-gap: 40px; }
-@media (max-width: 900px) { .faq-list { column-count: 1; } }
-.faq-list details {
-  break-inside: avoid; border-top: 1px solid var(--rule-s); padding: 14px 0;
-  margin: 0 0 2px;
-}
-.faq-list details[open] { border-top-color: var(--sodium); }
-.faq-list summary {
-  cursor: pointer; font-size: 15.5px; color: #e0dcd3; list-style: none;
-  display: flex; gap: 12px; align-items: baseline;
-}
-.faq-list summary::-webkit-details-marker { display: none; }
-.faq-list summary::before {
-  content: "+"; font-family: var(--mono); color: var(--sodium); flex: none;
-}
-.faq-list details[open] summary::before { content: "−"; }
-.faq-list details p { margin: 12px 0 0 24px; font-size: 14.5px; color: #b4b0a7; }
-.faq-list details.hide { display: none; }
-
 /* ── refs ────────────────────────────────────────────────────────────────── */
 #refs { border-top: 1px solid var(--rule); padding: clamp(60px, 9vh, 110px) 0 calc(var(--rail-h) + 40px); background: var(--deep); }
 .refs { columns: 2; column-gap: 44px; font-size: 14px; color: var(--dim); padding-left: 1.2em; }
@@ -525,9 +496,9 @@ input[type=range] { width: 100%; accent-color: var(--sodium); }
 .scene > .scene-inner > .wrap { width: 100%; min-width: 0; max-width: 100%; }
 .scene-inner { width: 100%; }
 h1, h2, h3 { overflow-wrap: break-word; }
-#faq .scene-inner, #provenance .scene-inner { align-items: flex-start; }
-#faq, #provenance { min-height: 100svh; }
-#faq .scene-inner, #provenance .scene-inner { position: static; min-height: 0; padding-bottom: 90px; }
+#provenance .scene-inner { align-items: flex-start; }
+#provenance { min-height: 100svh; }
+#provenance .scene-inner { position: static; min-height: 0; padding-bottom: 90px; }
 
 /* ── entrance choreography ───────────────────────────────────────────────── */
 /* GSAP owns opacity, transform and clip-path on these elements from here on.

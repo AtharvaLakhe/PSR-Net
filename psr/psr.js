@@ -763,29 +763,8 @@ function wireScroll() {
   });
 }
 
-function wireFaq() {
-  const input = $('faq-q');
-  const items = [...document.querySelectorAll('#faq-list details')];
-  const count = $('faq-count');
-  const update = () => {
-    const q = input.value.trim().toLowerCase();
-    let n = 0;
-    for (const d of items) {
-      const hit = !q || d.textContent.toLowerCase().includes(q);
-      d.classList.toggle('hide', !hit);
-      if (hit) n++;
-      if (q && hit) d.open = true;
-      if (!q) d.open = false;
-    }
-    count.textContent = `${n} of ${items.length} shown`;
-  };
-  input.addEventListener('input', update);
-  update();
-}
-
 /* ── boot ────────────────────────────────────────────────────────────────── */
 (async function start() {
-  wireFaq();
   boot.set(4, 'reading the frame');
   drawPole().catch(() => {});
 

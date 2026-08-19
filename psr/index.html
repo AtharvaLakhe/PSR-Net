@@ -460,8 +460,10 @@
         </p>
         <p class="step-why">
           On 24 held-out scenes it scores <b>20.28 dB</b> against the chain's
-          <b>17.47</b> — but read the next answer in the FAQ before quoting that at
-          anyone.
+          <b>17.47</b>. Held out means scenes and noise seeds it never trained on —
+          but from the same generator, so it proves the network inverts this
+          calibrated degradation better than a fixed operator chain, not that it
+          works on real OHRC frames.
         </p>
       </div>
 
@@ -898,145 +900,6 @@
           <li><b>Then</b> — cross-validate against ShadowCam coverage of the same PSRs and publish a detection completeness curve from injection-recovery.</li>
           <li><b>Gate</b> — no product goes into a landing-site decision without the completeness curve and the confidence raster attached to it.</li>
         </ol>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ── 11 · FAQ ──────────────────────────────────────────────────────────── -->
-<section id="faq" class="scene" data-chapter="Answers">
-  <div class="scene-inner">
-    <div class="wrap">
-      <p class="eyebrow" data-anim="up">Interrogation</p>
-      <h2 data-anim="mask">The questions a reviewer actually asks.</h2>
-      <div class="faq-search">
-        <label for="faq-q" class="sr">Filter questions</label>
-        <input type="search" id="faq-q" placeholder="Filter — try “hallucination”, “SSIM”, “ShadowCam”, “ice”">
-        <span id="faq-count"></span>
-      </div>
-
-      <div class="faq-list" id="faq-list">
-
-        <details><summary>If there is no ground truth, what exactly is PSNR being measured against?</summary>
-          <p>Against a synthetic target: the same modelled terrain rendered under a 25° sun with no sensor noise. The pipeline never sees it. This measures the inverse of the degradation that was modelled — nothing more. On real OHRC frames no full-reference metric is defined, and the page says so; there the evidence is contrast-to-noise, ensemble stability, cross-sensor agreement and injection recovery.</p>
-        </details>
-
-        <details><summary>Then isn't the whole result circular? You invert a degradation you wrote yourself.</summary>
-          <p>For the full-reference numbers, yes, and that limitation is the reason the validation section lists five other tests. The circularity is broken in two places: the sensor model is fixed by the published instrument specification rather than fitted to make results look good, and the external checks (ShadowCam overlap, injection recovery on real frames, topographic consistency) involve no synthetic data at all. A model whose only evidence is its own simulator is a hypothesis, not a product.</p>
-        </details>
-
-        <details><summary>Why not a diffusion model or a GAN? They would look far better.</summary>
-          <p>That is precisely the objection. A generative prior fills in what the data cannot support, and it does so convincingly. For a landing-site hazard map the cost of a plausible fictional boulder is not aesthetic. The architecture here uses no adversarial term, and the loss ties output back to the input's photon statistics. If a competitor's output looks sharper, the correct next question is what their injection-recovery false-positive rate is.</p>
-        </details>
-
-        <details><summary>How do you know the recovered detail is not hallucinated?</summary>
-          <p>Three mechanisms. Ensemble stability: candidates are re-tested against independent noise realisations, and only what recurs is reported, with the recurrence fraction as confidence. Bounded operators: deconvolution iterations are capped and CLAHE clip is limited, so no operator has unbounded gain. Uncertainty output: the production network predicts per-pixel variance, so low-confidence regions are flagged rather than smoothed. None of these prove correctness; together they bound the failure rate and make it measurable.</p>
-        </details>
-
-        <details><summary>Richardson–Lucy is fifty years old. Why is it in a 2025 pipeline?</summary>
-          <p>Because it is the maximum-likelihood estimator for Poisson-distributed measurements, and a photon-starved frame is Poisson. Its non-negativity constraint prevents the ringing that a Wiener filter produces at high-contrast rims. It is used here as a physically-motivated baseline and as the operator the learned model is trained to improve on — and in the ablation table you can see exactly what it contributes, live.</p>
-        </details>
-
-        <details><summary>What is the actual limiting resolution? Can it resolve a 50 cm boulder?</summary>
-          <p>The optical sampling limit is 0.25 m, so a 50 cm boulder is two pixels — detectable only if its contrast against the local background exceeds the noise after processing. In this frame the recovery reliably returns blocks down to roughly 1.5 m; below that the completeness curve falls off and the honest answer is a probability, not a yes. That curve is exactly what injection-recovery on real frames is for, and it is listed as future work rather than claimed.</p>
-        </details>
-
-        <details><summary>Deconvolution cannot create information that was never sampled. So what is it doing?</summary>
-          <p>Correct — it redistributes it. The PSF and the 2.4-pixel TDI smear spread energy from one ground element across several detector elements; the information is present but mixed. Deconvolution unmixes it, up to the noise level. Nothing recovers spatial frequencies beyond the optical cutoff, and no claim on this page depends on doing so.</p>
-        </details>
-
-        <details><summary>Why is a guided filter better here than BM3D or a learned denoiser?</summary>
-          <p>For the in-browser demonstration it is a deliberate trade: linear time, no training, no gradient reversals at edges, and fully inspectable. BM3D is stronger on Gaussian noise at these SNRs and the production chain uses a learned denoiser trained on the physical noise model, which is mixed Poisson-Gaussian rather than Gaussian. The ablation table shows what the current denoiser contributes; substituting a stronger one moves that row and nothing else.</p>
-        </details>
-
-        <details><summary>How is the secondary illumination inside the PSR modelled, and how wrong is it?</summary>
-          <p>Single-bounce: the sunlit radiance field is blurred over a crater-scale kernel and gated by a sky-visibility term, scaled to 3×10<sup>−3</sup> of direct. Real transport is multiple-bounce with a wavelength-dependent regolith phase function, and published estimates for PSR irradiance span 10<sup>−3</sup> to 10<sup>−5</sup> depending on geometry. So the model is good to a factor of a few — the same accuracy the published estimates themselves carry. It sets the noise regime, and the pipeline is evaluated across that whole range in the lab section.</p>
-        </details>
-
-        <details><summary>Your network beats the chain by 2.8 dB. On data from the generator it was trained on. What does that actually prove?</summary>
-        <p>Less than the number suggests, and the honest answer matters more than the number. It proves the network learned to invert <em>this</em> degradation better than a fixed operator chain does — which is a real result, because the degradation is a calibrated sensor model rather than something convenient, and the held-out scenes and noise seeds were never seen in training. It does not prove performance on real OHRC frames. The network has also learned the terrain statistics of the generator: crater and boulder size-frequency laws, the shape of the illumination field. Real regolith will differ, and where it differs the network is extrapolating. That is why the deterministic chain stays in the product rather than being replaced — it makes no assumptions about what the ground looks like — and why the deployment gate is injection-recovery on real frames, not this table.</p>
-      </details>
-
-      <details><summary>Why is the deterministic chain only 0.2 dB better than doing nothing?</summary>
-        <p>Because PSNR is measuring the wrong thing for that chain, and the page says so in the ablation notes too. Retinex and CLAHE deliberately change global tone; the affine fit before scoring removes the offset and gain but not the non-linearity, so the chain gets no credit for the thing it is actually for — making the frame legible. Look at CNR instead, where the chain moves 2.8 to 4.0, and at the picture, where the craters appear. The network wins on PSNR because it was optimised against a target of exactly this kind. Two methods, two different objectives, and the metric flatters one of them.</p>
-      </details>
-
-      <details><summary>The frame is synthetic. Why should any of this transfer to real OHRC data?</summary>
-          <p>It should not be assumed to, and that is stated in the provenance table. What transfers is the operator chain and its ordering, which follow from the physics of the sensor rather than from the synthetic scene. The domain gap is real: actual regolith has a photometric function this render approximates, and actual detectors have artefacts no model anticipates. Closing it needs the PRADAN archive, which is the first item of future work.</p>
-        </details>
-
-        <details><summary>Why six azimuths for the PSR mask? Real PSR maps integrate over a full year.</summary>
-          <p>Six is a coarse sampling chosen so the map recomputes in seconds in a demonstration. It gives extent and location that agree with published maps but will miss thin slivers that are lit only at particular sub-solar longitudes. A production mask integrates the true solar ephemeris over at least one precession cycle, including the 18.6-year lunar nodal cycle, and uses topography beyond the frame because a distant massif can shadow a floor.</p>
-        </details>
-
-        <details><summary>Does the 1.54° obliquity figure not vary?</summary>
-          <p>It does. The Moon's obliquity to the ecliptic is 1.54°, but the Cassini state means the spin axis precesses with the orbit's node on an 18.6-year cycle, so the effective sub-solar latitude range at the poles varies by about ±1.5°. PSRs defined over one year and over a full nodal cycle are not the same set — the difference is where "permanently" earns its scare quotes, and where seasonal-shadow regions live.</p>
-        </details>
-
-        <details><summary>What about scattered light from the illuminated part of the frame into the shadowed part inside the optics?</summary>
-          <p>A serious problem, and the reason OHRC frames containing both a sunlit wall and a PSR floor need stray-light characterisation before enhancement. Off-axis rejection of the telescope sets a floor on achievable contrast that no processing can beat: enhancing a veiling glare produces structure in the glare, not in the ground. The correct engineering answer is to acquire PSR frames without bright terrain in or near the field where possible, and to measure the veiling-glare PSF where it is not.</p>
-        </details>
-
-        <details><summary>Why not just use ShadowCam, which was built for this?</summary>
-          <p>You should, wherever it has coverage — it is 200× more sensitive and it was purpose-built. The two are complementary: ShadowCam gives sensitivity at 1.7 m/px, OHRC gives 0.25 m sampling. Enhancing OHRC gives resolution ShadowCam cannot, and ShadowCam gives the independent check that makes the enhanced OHRC product believable. Treating them as competitors wastes the best validation dataset available.</p>
-        </details>
-
-        <details><summary>How do you handle the fact that the noise is Poisson, not Gaussian?</summary>
-          <p>At the electron counts involved the two are not interchangeable — variance tracks the mean, so a single global noise estimate is wrong everywhere. Richardson–Lucy is a Poisson estimator by construction. The production loss includes a Poisson likelihood term, and the training data is generated with true Poisson sampling rather than additive Gaussian, which is where a lot of published low-light work quietly cheats.</p>
-        </details>
-
-        <details><summary>What is the throughput on a real OHRC strip?</summary>
-          <p>Roughly 1.2 GFLOP per megapixel for the operator chain; a 3 km × 20 km strip at 0.25 m is about 960 Mpx, so a few seconds per strip on one contemporary GPU and a few minutes on a CPU. It is a ground-segment batch job, not an onboard one, so latency is not a constraint — reproducibility and provenance logging are.</p>
-        </details>
-
-        <details><summary>Would this work on LRO NAC PSR images too?</summary>
-          <p>Yes, with a re-parameterised sensor model — that is essentially the HORUS result, which demonstrated the approach on NAC. The method is not OHRC-specific; what is instrument-specific is the noise model, the PSF and the smear term, all of which are parameters rather than architecture.</p>
-        </details>
-
-        <details><summary>What does the confidence raster actually mean, statistically?</summary>
-          <p>Two different things, kept separate. Per-pixel predicted variance is aleatoric: the irreducible uncertainty given the photon count at that pixel. Monte-Carlo dropout spread is epistemic: how much the model itself disagrees run to run, which is where out-of-distribution inputs announce themselves. Neither is a calibrated probability until it is checked against injection-recovery, and until then it should be read as a ranking, not a percentage.</p>
-        </details>
-
-        <details><summary>Why 12-bit data packed into a PNG rather than a normal grayscale image?</summary>
-          <p>Because an 8-bit PNG would throw away the thing the page is about. The frame ships with the high byte in red and the low byte in green, and the browser reconstructs the original 0–4095 DN before any processing. Everything you see is computed from the real dynamic range, not from a pre-stretched picture.</p>
-        </details>
-
-        <details><summary>Isn't CLAHE just making the noise look like texture?</summary>
-          <p>It can, and that is what the clip limit exists to bound. The demonstration lets you raise it to 6 and watch the frame get more attractive while SSIM against the target falls — the clearest available illustration that visual improvement and fidelity are different axes. Delivered products run at 2.6 and log the value.</p>
-        </details>
-
-        <details><summary>How do you avoid over-fitting the network to the simulator's quirks?</summary>
-          <p>Randomise the generator aggressively: PSF width, smear magnitude, read noise, dark level, PRNU, albedo distribution, crater and boulder SFD exponents and the secondary-illumination scale all sample from ranges wider than the nominal values. A model that only works at the nominal parameters has learned the simulator. Held-out evaluation uses parameter combinations never seen in training, and the real test remains real data.</p>
-        </details>
-
-        <details><summary>What is the false-positive rate on boulder detection?</summary>
-          <p>On this frame, with ensemble stability filtering at four realisations, unstable candidates are rejected outright and the retained/rejected counts are shown at stage 07 as computed. A defensible false-positive rate on real data requires injection-recovery against real frames, which needs archive access; quoting one now would be inventing it. That is why the readiness section lists the completeness curve as a gate rather than a result.</p>
-        </details>
-
-        <details><summary>Does enhancement change the radiometry? Can I do photometry on the output?</summary>
-          <p>No, and this matters. Retinex and CLAHE are non-linear and spatially varying: they destroy the relationship between DN and radiance. The delivered product is therefore two rasters — a radiometrically valid one for quantitative work, carrying only the linear corrections, and an enhanced one for morphological interpretation and hazard mapping. Conflating them is a real hazard in published enhanced imagery.</p>
-        </details>
-
-        <details><summary>Why does the pipeline order matter so much?</summary>
-          <p>Because each stage assumes the previous one's output. Denoising before destriping treats a coherent electronic artefact as signal and preserves it. Deconvolving before denoising amplifies noise without bound — Richardson–Lucy's gain on high spatial frequencies grows with every iteration. Tone mapping before deconvolution destroys the linear relationship deconvolution assumes. The ablation table lets you re-order in effect by removing stages and watching what breaks.</p>
-        </details>
-
-        <details><summary>What happens at the boundary between sunlit terrain and PSR?</summary>
-          <p>It is the hardest region in the frame: five orders of magnitude of dynamic range across a few pixels, plus optical stray light, plus the possibility of saturation bleeding along the TDI transfer direction. The pipeline segments on illumination and processes the two regimes separately rather than applying one global operator, and the boundary strip is marked low-confidence rather than reconstructed.</p>
-        </details>
-
-        <details><summary>Is water ice actually visible in these images?</summary>
-          <p>Not directly, and the page does not claim it. Surface frost has been inferred from ultraviolet and near-infrared spectroscopy and from Lyman-alpha albedo, not from panchromatic morphology. What imaging contributes is context: where the blocky terrain is, where sublimation pits might be, whether a candidate landing area is trafficable. Anyone claiming to see ice in a panchromatic PSR image should be asked which absorption feature they are seeing it in.</p>
-        </details>
-
-        <details><summary>What licence covers the data and the code?</summary>
-          <p>The LOLA DEM and the LROC mosaic are NASA/GSFC products in the public domain, credited in the provenance table. The synthetic scenes, the operator chain and this page are the project's own work and are released under the repository's MIT licence. The trained network, if published, would carry the same, together with the generator that produced its training set — because a model without its data-generating process is not reproducible.</p>
-        </details>
-
-        <details><summary>What would falsify this?</summary>
-          <p>A ShadowCam frame over the same PSR showing block distributions materially different from the recovered ones; an injection-recovery curve showing completeness collapsing above the claimed 1.5 m limit; or stability-filtered detections that fail to survive a change of noise seed. All three are cheap to run once archive access exists, and all three are listed as gates rather than as things to attempt afterwards.</p>
-        </details>
-
       </div>
     </div>
   </div>
