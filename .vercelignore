@@ -1,0 +1,7 @@
+# Not needed to serve the site, and huge: the scene bank is 386 MB of cached
+# synthesis and is rebuilt by psr/train/synth.py in about seven minutes.
+psr/train/bank
+psr/train/runs
+node_modules
+.git
+*.log
