@@ -1,0 +1,11 @@
+{
+ "params": 714401,
+ "width": 32,
+ "step": 34000,
+ "best_val_psnr": 17.5549669200683,
+ "size_bytes": 2969983,
+ "opset": 17,
+ "size_multiple": 4,
+ "input": "1x1xHxW float32, percentile-normalised DN; H and W divisible by 4",
+ "note": "Trained on synthetic PSR frames with a randomised OHRC sensor model."
+}

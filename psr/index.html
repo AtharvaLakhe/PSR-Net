@@ -8,16 +8,18 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='12' fill='%23151922'/%3E%3Cpath d='M16 4a12 12 0 0 1 0 24z' fill='%23ffb454'/%3E%3Ccircle cx='13' cy='18' r='4.5' fill='%237c86ff'/%3E%3C/svg%3E">
 <script>document.documentElement.classList.add('js');</script>
 <link rel="stylesheet" href="psr.css">
-<!-- GSAP is served from node_modules like three.js is: no CDN, no build step, and
-     the page still runs with the network unplugged. -->
+<!-- Everything comes from /vendor, which `npm run vendor` fills from node_modules.
+     No CDN: the page still runs with the network unplugged, and the same paths
+     work on a static host, where node_modules does not exist. -->
 <script type="importmap">
 {
   "imports": {
-    "three": "../node_modules/three/build/three.module.js",
-    "three/addons/": "../node_modules/three/examples/jsm/",
-    "gsap": "../node_modules/gsap/index.js",
-    "gsap/ScrollTrigger": "../node_modules/gsap/ScrollTrigger.js",
-    "gsap/SplitText": "../node_modules/gsap/SplitText.js"
+    "three": "/vendor/three/build/three.module.js",
+    "three/addons/": "/vendor/three/examples/jsm/",
+    "gsap": "/vendor/gsap/index.js",
+    "onnxruntime-web": "/vendor/ort/ort.wasm.bundle.min.mjs",
+    "gsap/ScrollTrigger": "/vendor/gsap/ScrollTrigger.js",
+    "gsap/SplitText": "/vendor/gsap/SplitText.js"
   }
 }
 </script>
@@ -53,7 +55,7 @@
   <div class="chrome-r">
     <span class="stage-name" id="chrome-stage">RAW FRAME</span>
     <span class="sep">/</span>
-    <span class="muted">STAGE</span> <span id="chrome-idx">00</span><span class="muted">/07</span>
+    <span class="muted">STAGE</span> <span id="chrome-idx">00</span><span class="muted">/09</span>
   </div>
 </header>
 
@@ -336,7 +338,7 @@
         <span class="vp-stage" id="vp-stage">00 · RAW</span>
         <span class="vp-meta" id="vp-meta">1024 × 1024 · 0.25 m/px · 256 m field</span>
       </div>
-      <div class="vp-canvas-wrap">
+      <div class="vp-canvas-wrap" tabindex="0" role="slider" aria-label="Comparison wipe between the recovered frame and the target" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
         <canvas id="vp-canvas" width="512" height="512" aria-label="Live view of the frame at the current pipeline stage"></canvas>
         <canvas id="vp-annot" width="512" height="512" aria-hidden="true"></canvas>
         <div class="vp-loading" id="vp-loading"><span></span>Running the pipeline…</div>
@@ -442,8 +444,29 @@
         <p class="step-why">Clip limit 2.6. Raise it and the picture gets prettier and less true.</p>
       </div>
 
-      <div class="step" data-stage="7">
+      <div class="step" data-stage="9">
         <p class="step-n">Stage 07</p>
+        <h3>The trained network</h3>
+        <p>
+          Everything above is the deterministic chain — operators anyone can audit,
+          each one doing a thing you can name. This stage is PSR-Net: 714 000
+          parameters trained on synthetic frames whose sensor was re-randomised on
+          every single sample, so it never saw the same noise, blur, gain or column
+          pattern twice.
+        </p>
+        <p class="step-why">
+          Running here, in your browser, on the same array the chain got.
+          <b id="k-netms">—</b>
+        </p>
+        <p class="step-why">
+          On 24 held-out scenes it scores <b>20.28 dB</b> against the chain's
+          <b>17.47</b> — but read the next answer in the FAQ before quoting that at
+          anyone.
+        </p>
+      </div>
+
+      <div class="step" data-stage="7">
+        <p class="step-n">Stage 08</p>
         <h3>Detection, with a hallucination test</h3>
         <p>
           Laplacian-of-Gaussian blobs across a scale octave, scored on the
@@ -459,7 +482,7 @@
       </div>
 
       <div class="step" data-stage="8">
-        <p class="step-n">Result</p>
+        <p class="step-n">Stage 09 · Result</p>
         <h3>Against the target</h3>
         <p>
           The right-hand half is the paired target: the same scene under the same
@@ -467,7 +490,7 @@
           has ever seen it. It exists so the numbers underneath the viewport can be
           measured rather than asserted.
         </p>
-        <p class="step-why">Drag the divider to compare.</p>
+        <p class="step-why">Drag the divider, or focus the frame and use the arrow keys.</p>
       </div>
     </div>
   </div>
@@ -491,10 +514,12 @@
         <article class="card" data-anim="up">
           <h3>Backbone</h3>
           <p>
-            A U-shaped restoration transformer in the NAFNet / Restormer family: four
-            encoder stages, channel attention, no batch norm, gated feed-forward blocks.
-            22 M parameters. Chosen over a diffusion prior deliberately — diffusion
-            models produce plausible detail, and plausible is exactly what a landing-site
+            A NAFNet-style U-Net: three scales, depthwise convolution, SimpleGate,
+            channel attention, no batch norm. 714 401 parameters — deliberately small.
+            A frame whose entire dynamic range is a dozen DN does not support a large
+            model, and capacity beyond what the data supports is capacity available for
+            inventing detail. No diffusion prior and no adversarial head, because both
+            produce plausible texture, and plausible is exactly what a landing-site
             product must not contain.
           </p>
         </article>
@@ -539,15 +564,16 @@
       <p class="eyebrow" data-anim="up">Honest scope</p>
       <div class="disclosure" data-anim="up">
         <h4>What is running on this page</h4>
-        <p>
-          The trained weights are not shipped in a static web page — a 22 M-parameter
-          model is not a 40 kB download, and a demo that quietly loads a server would be
-          making a claim it cannot keep offline. What runs here is the deterministic
-          operator chain the network is trained to approximate: the same stages, the same
-          order, the same physics, executing on your machine against the same 12-bit data.
-          Every number on this page was computed by that code a moment ago. Numbers that
-          would require the trained network are labelled as targets, not results.
+        <p id="net-disclosure">
+          Both halves run here, on your machine, against the same 12-bit array: the
+          deterministic operator chain, and the trained network. PSR-Net is
+          <b id="net-params">714,401</b> parameters — small enough to be a
+          <b id="net-size">2.9 MB</b> static file, which is the only reason a web page
+          can honestly claim to be running the model rather than describing it. It was
+          trained on synthetic frames whose sensor was re-randomised every sample; the
+          generator, the training script and the checkpoint are all in this repository.
         </p>
+        <p class="net-live" id="net-live">Checking for weights…</p>
       </div>
     </div>
   </div>
@@ -557,6 +583,17 @@
   <div class="scene-inner">
   <div class="wrap">
     <p class="eyebrow" data-anim="up">Ablation</p>
+    <h3 class="ablate-h">Learned versus deterministic, on held-out scenes</h3>
+    <p class="ablate-p">
+      Both methods get the same input, both are scored after the same affine fit to the
+      target, and the held-out scenes are degraded with fixed seeds so the comparison is
+      reproducible. Run <code>python psr/train/evaluate.py</code> to regenerate it.
+    </p>
+    <table class="ablation" id="bench">
+      <thead><tr><th>Method</th><th>PSNR (dB)</th><th>SSIM</th><th>Δ vs raw</th></tr></thead>
+      <tbody><tr><td colspan="4" class="pending">No benchmark file yet — train the model to produce one.</td></tr></tbody>
+    </table>
+
     <h3 class="ablate-h">Ablation, measured live</h3>
       <p class="ablate-p">
         Each row removes one stage and re-runs everything else against the paired target.
@@ -730,8 +767,13 @@
           </tr>
           <tr>
             <td>Trained network weights</td>
-            <td><span class="tag tag-absent">Not shipped</span></td>
-            <td>The architecture and training regime are specified above. The browser runs the deterministic operator chain the network approximates. Figures requiring the trained model are marked as targets.</td>
+            <td><span class="tag tag-real">Trained here</span></td>
+            <td>PSR-Net was trained on this project's own generator — 384 cached scenes, sensor re-randomised every sample — and exported to ONNX with a numerical check against the PyTorch graph before shipping. The page loads the weights and runs them; if they are absent it says so in the model section rather than pretending. Generator, training script, checkpoint and benchmark are all in <code>psr/train</code>.</td>
+          </tr>
+          <tr>
+            <td>The learned-vs-deterministic table</td>
+            <td><span class="tag tag-derived">Measured</span></td>
+            <td>Produced by <code>evaluate.py</code> on scenes held out of training, with fixed degradation seeds, both methods scored identically. The page reads that file; it does not restate it.</td>
           </tr>
         </tbody>
       </table>
@@ -911,7 +953,15 @@
           <p>Single-bounce: the sunlit radiance field is blurred over a crater-scale kernel and gated by a sky-visibility term, scaled to 3×10<sup>−3</sup> of direct. Real transport is multiple-bounce with a wavelength-dependent regolith phase function, and published estimates for PSR irradiance span 10<sup>−3</sup> to 10<sup>−5</sup> depending on geometry. So the model is good to a factor of a few — the same accuracy the published estimates themselves carry. It sets the noise regime, and the pipeline is evaluated across that whole range in the lab section.</p>
         </details>
 
-        <details><summary>The frame is synthetic. Why should any of this transfer to real OHRC data?</summary>
+        <details><summary>Your network beats the chain by 2.8 dB. On data from the generator it was trained on. What does that actually prove?</summary>
+        <p>Less than the number suggests, and the honest answer matters more than the number. It proves the network learned to invert <em>this</em> degradation better than a fixed operator chain does — which is a real result, because the degradation is a calibrated sensor model rather than something convenient, and the held-out scenes and noise seeds were never seen in training. It does not prove performance on real OHRC frames. The network has also learned the terrain statistics of the generator: crater and boulder size-frequency laws, the shape of the illumination field. Real regolith will differ, and where it differs the network is extrapolating. That is why the deterministic chain stays in the product rather than being replaced — it makes no assumptions about what the ground looks like — and why the deployment gate is injection-recovery on real frames, not this table.</p>
+      </details>
+
+      <details><summary>Why is the deterministic chain only 0.2 dB better than doing nothing?</summary>
+        <p>Because PSNR is measuring the wrong thing for that chain, and the page says so in the ablation notes too. Retinex and CLAHE deliberately change global tone; the affine fit before scoring removes the offset and gain but not the non-linearity, so the chain gets no credit for the thing it is actually for — making the frame legible. Look at CNR instead, where the chain moves 2.8 to 4.0, and at the picture, where the craters appear. The network wins on PSNR because it was optimised against a target of exactly this kind. Two methods, two different objectives, and the metric flatters one of them.</p>
+      </details>
+
+      <details><summary>The frame is synthetic. Why should any of this transfer to real OHRC data?</summary>
           <p>It should not be assumed to, and that is stated in the provenance table. What transfers is the operator chain and its ordering, which follow from the physics of the sensor rather than from the synthetic scene. The domain gap is real: actual regolith has a photometric function this render approximates, and actual detectors have artefacts no model anticipates. Closing it needs the PRADAN archive, which is the first item of future work.</p>
         </details>
 

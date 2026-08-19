@@ -2,3 +2,9 @@ node_modules/
 package-lock.json
 *.log
 .DS_Store
+
+# Built by scripts/vendor.mjs from node_modules on install and on deploy.
+# Committing 36 MB of copied library code would be the same mistake as
+# committing node_modules itself.
+vendor/
+.vercel/

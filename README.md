@@ -36,6 +36,34 @@ instead of drawing a mathematically perfect circle.
 | `/` | The orbital lunar terminal — the Moon in WebGL with a taskable comms satellite |
 | `/psr/` | **PSR-NET** — a scroll-driven paper on recovering terrain from permanently shadowed craters imaged by Chandrayaan-2 OHRC, with the whole enhancement pipeline running live in the browser |
 
+## The model
+
+`psr/train` holds everything needed to reproduce PSR-Net, the network the page
+runs. It needs a CUDA GPU to be quick, but it will train on CPU given patience.
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install numpy scipy pillow scikit-image onnx onnxruntime
+
+python psr/train/synth.py 384        # cache the scene bank (~7 min, 386 MB)
+python psr/train/train.py            # 36k steps, ~3 h on an RTX 5050
+python psr/train/evaluate.py         # learned vs the deterministic chain
+python psr/train/export_onnx.py      # ONNX + numeric check, into psr/model
+```
+
+The scenes are cached once; the *sensor* is re-randomised on every sample, with
+every parameter drawn from a range wider than OHRC's nominal figures. A model
+that only works at the nominal values has learned the simulator, not the
+inverse problem.
+
+`export_onnx.py` refuses to write a model whose ONNX graph disagrees with the
+PyTorch one by more than 2e-3, because an ONNX file that loads is not an ONNX
+file that agrees.
+
+The page loads `psr/model/psrnet.onnx` if it is there and states what it
+found — parameters, training step, held-out score, execution provider. With no
+weights present it says so and shows the deterministic chain alone.
+
 ## Run
 
 Needs [Node.js](https://nodejs.org) 18 or newer and a current browser. Nothing

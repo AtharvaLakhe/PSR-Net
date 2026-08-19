@@ -1,0 +1,12 @@
+# The scene bank is 386 MB of cached synthesis and the checkpoints are 17 MB.
+# Both are reproducible: synth.py rebuilds the bank in about seven minutes and
+# train.py rebuilds the weights from it. What ships is the 2.9 MB ONNX in
+# psr/model, which is the only artefact the page actually loads.
+bank/
+runs/
+# …except the trained checkpoint itself, which is force-added: it is what the
+# ONNX was exported from, and without it nobody can continue training or verify
+# the export.
+!runs/psrnet_best.pt
+train.log
+__pycache__/

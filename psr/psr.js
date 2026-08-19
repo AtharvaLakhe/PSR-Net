@@ -9,6 +9,7 @@ import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { SplitText } from 'gsap/SplitText';
 import { createJourney } from './journey.js';
+import { loadModel, enhance, modelStatus, modelMeta, modelBackend } from './net.js';
 
 gsap.registerPlugin(ScrollTrigger, SplitText);
 
@@ -34,6 +35,7 @@ const state = {
   rejected: 0,
   meta: null,
   current: 0,
+  split: 0.5,        // where the comparison wipe sits, 0..1
 };
 
 /* ── image loading ───────────────────────────────────────────────────────── */
@@ -68,14 +70,14 @@ async function loadGray(src) {
 }
 
 /* ── drawing ─────────────────────────────────────────────────────────────── */
-function paint(canvas, buf, { lo, hi, gamma = 1 } = {}) {
+function paint(canvas, buf, { lo, hi, gamma = 1, src: srcW = W } = {}) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   const img = ctx.createImageData(w, h);
   const a = lo === undefined ? E.percentile(buf, 0.4) : lo;
   const b = hi === undefined ? E.percentile(buf, 99.6) : hi;
   const span = Math.max(b - a, 1e-9);
-  const src = (w === W) ? buf : E.resample(buf, W, W, w, h);
+  const src = (w === srcW && h === srcW) ? buf : E.resample(buf, srcW, srcW, w, h);
   for (let i = 0; i < w * h; i++) {
     let v = (src[i] - a) / span;
     v = v < 0 ? 0 : v > 1 ? 1 : v;
@@ -138,7 +140,11 @@ function metricsFor(buf) {
 }
 
 function runChain(dn, opts = {}) {
-  const { iters = 24, clip = 2.6, skip = {} } = opts;
+  const { iters = 24, clip = 2.6, skip = {}, size = W } = opts;
+  const s = size;
+  // scales that were tuned at 512 have to follow the working size, or the lab
+  // at half resolution would be running a different filter to the story
+  const k = s / W;
   const out = [];
   let cur = Float32Array.from(dn);
   out.push({ id: 0, name: 'RAW', buf: cur });
@@ -146,19 +152,19 @@ function runChain(dn, opts = {}) {
   if (!skip.radiometric) cur = E.radiometric(cur).out;
   out.push({ id: 1, name: 'RADIOMETRIC', buf: cur });
 
-  if (!skip.destripe) cur = E.destripe(cur);
+  if (!skip.destripe) cur = E.destripe(cur, s, s);
   out.push({ id: 2, name: 'DESTRIPED', buf: cur });
 
-  if (!skip.denoise) cur = E.guided(cur, 6, 9.0);
+  if (!skip.denoise) cur = E.guided(cur, Math.max(2, 6 * k), 9.0, s, s);
   out.push({ id: 3, name: 'DENOISED', buf: cur });
 
-  if (!skip.retinex) cur = E.retinex(cur);
+  if (!skip.retinex) cur = E.retinex(cur, [22 * k, 60 * k, 140 * k], s, s);
   out.push({ id: 4, name: 'ILLUMINATION', buf: cur });
 
-  if (!skip.deconv && iters > 0) cur = E.richardsonLucy(cur, 1.35, iters);
+  if (!skip.deconv && iters > 0) cur = E.richardsonLucy(cur, 1.35 * k, iters, s, s);
   out.push({ id: 5, name: 'DECONVOLVED', buf: cur });
 
-  if (!skip.clahe) cur = E.clahe(cur, 8, clip);
+  if (!skip.clahe) cur = E.clahe(cur, 8, clip, s, s);
   out.push({ id: 6, name: 'LOCAL CONTRAST', buf: cur });
 
   out.push({ id: 7, name: 'DETECTION', buf: cur });
@@ -189,13 +195,138 @@ async function buildPipeline() {
   const scored = E.stabilityFilter(base, runFn, 3, 3.5);
   state.detections = scored.filter((d) => d.confidence >= 0.66);
   state.rejected = scored.length - state.detections.length;
+
+  /* the trained network, on the same array the chain was handed */
+  boot.set(88, 'loading the trained network');
+  const ok = await loadModel();
+  if (ok) {
+    const r = await enhance(state.dn, W);
+    if (r) {
+      state.stages[9] = { id: 9, name: 'PSR-NET', buf: r.data, metrics: metricsFor(r.data) };
+      state.netMs = r.ms;
+    }
+  }
+  if (!state.stages[9]) {
+    // no weights, no runtime, or no network: the chain's own result stands in and
+    // the copy says so rather than showing an empty screen
+    state.stages[9] = { ...state.stages[6], id: 9, name: 'PSR-NET' };
+    state.netMissing = true;
+  }
+}
+
+/* ── the comparison wipe ─────────────────────────────────────────────────────
+   Recovered on the left, the target it never saw on the right, and the reader
+   decides where the seam falls. Cached target pixels because this repaints on
+   every pointer move.
+   ────────────────────────────────────────────────────────────────────────── */
+let truthPixels = null;
+
+function drawCompare() {
+  const canvas = $('vp-canvas');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const s = state.stages[8];
+  if (!s) return;
+
+  paint(canvas, s.buf);
+  const merged = ctx.getImageData(0, 0, w, h);
+
+  if (!truthPixels) {
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    paint(tmp, state.truth, { lo: 0, hi: 1 });
+    truthPixels = tmp.getContext('2d').getImageData(0, 0, w, h);
+  }
+
+  const cut = Math.round(state.split * w);
+  for (let y = 0; y < h; y++) {
+    for (let x = cut; x < w; x++) {
+      const p = (y * w + x) * 4;
+      merged.data[p] = truthPixels.data[p];
+      merged.data[p + 1] = truthPixels.data[p + 1];
+      merged.data[p + 2] = truthPixels.data[p + 2];
+    }
+  }
+  ctx.putImageData(merged, 0, 0);
+
+  // the seam, with a grip so it reads as something you can take hold of
+  ctx.fillStyle = '#ffb454';
+  ctx.fillRect(cut - 1, 0, 2, h);
+  ctx.beginPath();
+  ctx.arc(cut, h / 2, 13, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(8,10,14,.85)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffb454';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = '#ffb454';
+  ctx.beginPath();
+  ctx.moveTo(cut - 7, h / 2); ctx.lineTo(cut - 2, h / 2 - 4); ctx.lineTo(cut - 2, h / 2 + 4);
+  ctx.moveTo(cut + 7, h / 2); ctx.lineTo(cut + 2, h / 2 - 4); ctx.lineTo(cut + 2, h / 2 + 4);
+  ctx.fill();
+
+  ctx.font = '11px ui-monospace, monospace';
+  ctx.fillStyle = 'rgba(255,180,84,.92)';
+  if (cut > 92) ctx.fillText('RECOVERED', 10, h - 12);
+  if (w - cut > 66) ctx.fillText('TARGET', cut + 10, h - 12);
+}
+
+function wireCompare() {
+  const wrap = document.querySelector('.vp-canvas-wrap');
+  const canvas = $('vp-canvas');
+  let dragging = false;
+
+  const setFromEvent = (e) => {
+    const r = canvas.getBoundingClientRect();
+    state.split = Math.min(0.98, Math.max(0.02, (e.clientX - r.left) / r.width));
+    if (state.current === 8) {
+      drawCompare();
+      wrap.setAttribute('aria-valuenow', Math.round(state.split * 100));
+    }
+  };
+
+  wrap.addEventListener('pointerdown', (e) => {
+    if (state.current !== 8) return;
+    dragging = true;
+    // capture keeps the drag alive if the pointer leaves the canvas; it is not
+    // available for every pointer type, and its absence must not break the drag
+    try { wrap.setPointerCapture(e.pointerId); } catch { /* carry on uncaptured */ }
+    setFromEvent(e);
+    e.preventDefault();
+  });
+  wrap.addEventListener('pointermove', (e) => { if (dragging) setFromEvent(e); });
+  const stop = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { wrap.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+  };
+  wrap.addEventListener('pointerup', stop);
+  wrap.addEventListener('pointercancel', stop);
+
+  // reachable without a pointer at all
+  wrap.addEventListener('keydown', (e) => {
+    if (state.current !== 8) return;
+    const step = e.shiftKey ? 0.1 : 0.02;
+    if (e.key === 'ArrowLeft') state.split = Math.max(0.02, state.split - step);
+    else if (e.key === 'ArrowRight') state.split = Math.min(0.98, state.split + step);
+    else if (e.key === 'Home') state.split = 0.02;
+    else if (e.key === 'End') state.split = 0.98;
+    else return;
+    e.preventDefault();
+    drawCompare();
+  });
 }
 
 /* ── viewport ────────────────────────────────────────────────────────────── */
 const STAGE_LABEL = [
   'RAW FRAME', 'RADIOMETRIC', 'DESTRIPED', 'DENOISED',
   'ILLUMINATION', 'DECONVOLVED', 'LOCAL CONTRAST', 'DETECTION', 'VS TARGET',
+  'PSR-NET',
 ];
+/* The network was added to the chain after the fact, so its buffer lives at
+   index 9 while it is read seventh. Array position is not stage number, and the
+   viewport must show the number the reader sees in the step beside it. */
+const STAGE_NUM = ['00', '01', '02', '03', '04', '05', '06', '08', '09', '07'];
 
 function showStage(i) {
   if (!state.stages.length) return;
@@ -203,31 +334,9 @@ function showStage(i) {
   const s = state.stages[Math.min(i, state.stages.length - 1)];
   const canvas = $('vp-canvas');
 
+  document.body.classList.toggle('comparing', i === 8);
   if (i === 8) {
-    // final versus the target it never saw, split down the middle
-    const ctx = canvas.getContext('2d');
-    paint(canvas, s.buf);
-    const left = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const tmp = document.createElement('canvas');
-    tmp.width = canvas.width; tmp.height = canvas.height;
-    paint(tmp, state.truth, { lo: 0, hi: 1 });
-    const right = tmp.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-    const half = canvas.width >> 1;
-    for (let y = 0; y < canvas.height; y++) {
-      for (let x = half; x < canvas.width; x++) {
-        const p = (y * canvas.width + x) * 4;
-        left.data[p] = right.data[p];
-        left.data[p + 1] = right.data[p + 1];
-        left.data[p + 2] = right.data[p + 2];
-      }
-    }
-    ctx.putImageData(left, 0, 0);
-    ctx.fillStyle = '#ffb454';
-    ctx.fillRect(half - 1, 0, 2, canvas.height);
-    ctx.font = '11px ui-monospace, monospace';
-    ctx.fillStyle = 'rgba(255,180,84,.9)';
-    ctx.fillText('RECOVERED', 10, canvas.height - 12);
-    ctx.fillText('TARGET', half + 10, canvas.height - 12);
+    drawCompare();
   } else {
     paint(canvas, s.buf, i === 0 ? { lo: 0, hi: 4095 } : undefined);
   }
@@ -237,9 +346,18 @@ function showStage(i) {
     i === 0 ? 'thirteen distinct values, and that is the whole scene'
             : STAGE_LABEL[i].toLowerCase(), i <= 2);
 
-  $('vp-stage').textContent = `${String(i).padStart(2, '0')} · ${STAGE_LABEL[i]}`;
+  $('vp-stage').textContent = `${STAGE_NUM[i]} · ${STAGE_LABEL[i]}`;
   $('chrome-stage').textContent = STAGE_LABEL[i];
-  $('chrome-idx').textContent = String(Math.min(i, 7)).padStart(2, '0');
+  $('chrome-idx').textContent = STAGE_NUM[i];
+
+  if (i === 9) {
+    const el = $('k-netms');
+    if (el) {
+      el.textContent = state.netMissing
+        ? 'weights not present in this build — the chain result is shown instead'
+        : `${modelMeta()?.params.toLocaleString()} parameters · ${Math.round(state.netMs)} ms for 512x512 on ${modelBackend()}`;
+    }
+  }
 
   const m = s.metrics;
   $('m-psnr').textContent = m.psnr.toFixed(1);
@@ -323,10 +441,65 @@ function runAblation() {
   });
 }
 
-/* ── the lab ─────────────────────────────────────────────────────────────── */
-const lab = { source: null, timer: 0 };
+/* ── model provenance, read from the files the training run wrote ────────── */
+async function showModelFacts() {
+  const live = $('net-live');
+  const m = modelMeta();
+  if (m) {
+    $('net-params').textContent = m.params.toLocaleString();
+    $('net-size').textContent = `${(m.size_bytes / 1e6).toFixed(1)} MB`;
+    live.innerHTML = `Weights loaded: step <b>${m.step.toLocaleString()}</b>, ` +
+      `held-out validation <b>${m.best_val_psnr.toFixed(2)} dB</b>, running on ` +
+      `<b>${modelBackend()}</b>.`;
+    live.classList.add('ok');
+  } else {
+    live.textContent = 'No weights in this build — the deterministic chain is shown on its own. '
+      + 'Run psr/train/train.py, then export_onnx.py, and this section fills itself in.';
+  }
 
-function runLab() {
+  // the learned-vs-classical table, straight out of the benchmark run
+  try {
+    const b = await fetch('model/benchmark.json').then((r) => {
+      if (!r.ok) throw new Error('none');
+      return r.json();
+    });
+    const body = $('bench').querySelector('tbody');
+    body.innerHTML = '';
+    const rows = [['Raw frame', b.raw], ['Deterministic chain', b.classical], ['PSR-Net', b.learned]];
+    rows.forEach(([label, s], i) => {
+      const tr = document.createElement('tr');
+      if (i === 2) tr.className = 'base';
+      const d = s.psnr - b.raw.psnr;
+      tr.innerHTML = `<td>${label}</td><td>${s.psnr.toFixed(2)} ±${s.psnr_std.toFixed(2)}</td>` +
+        `<td>${s.ssim.toFixed(3)}</td><td>${i === 0 ? '—' : '+' + d.toFixed(2)}</td>`;
+      body.appendChild(tr);
+    });
+    const cap = document.createElement('tr');
+    cap.innerHTML = `<td colspan="4" class="bench-note">${b.scenes} held-out scenes at ` +
+      `${b.size}x${b.size}, fixed degradation seeds. PSR-Net beats the chain by ` +
+      `<b>${b.gain_over_classical_db >= 0 ? '+' : ''}${b.gain_over_classical_db.toFixed(2)} dB</b>.</td>`;
+    body.appendChild(cap);
+  } catch { /* no benchmark yet; the placeholder row stands */ }
+}
+
+/* ── the lab ─────────────────────────────────────────────────────────────── */
+/* The lab runs at half the story's resolution and defers the detector.
+
+   A slider drag used to re-run the whole chain at 512x512 including blob
+   detection — about two and a half seconds per frame of movement, which reads as
+   a broken control rather than a slow one. At 256 the chain is four times
+   cheaper, and detection (the single most expensive stage) only runs once you
+   stop moving, because a count that flickers during a drag tells you nothing
+   anyway. */
+const LAB_W = 256;
+const lab = { source: null, small: null, truth: null, queued: false, idle: 0, last: null };
+
+function labSource() {
+  if (!lab.small) lab.small = E.resample(lab.source, W, W, LAB_W, LAB_W);
+  return lab.small;
+}
+
+function runLab({ withDetections = false } = {}) {
   const blurSigma = +$('c-blur').value;
   const noiseDN = +$('c-noise').value;
   const iters = +$('c-iters').value;
@@ -336,24 +509,40 @@ function runLab() {
   $('v-iters').textContent = iters;
   $('v-clip').textContent = clip.toFixed(1);
 
-  const degraded = E.degrade(lab.source, { blurSigma, noiseDN, seed: 7 });
-  const chain = runChain(degraded, { iters, clip });
+  const k = LAB_W / W;
+  const degraded = E.degrade(labSource(), {
+    blurSigma: blurSigma * k, noiseDN, seed: 7, w: LAB_W, h: LAB_W,
+  });
+  const chain = runChain(degraded, { iters, clip, size: LAB_W });
   const out = chain[6].buf;
+  lab.last = out;
 
-  paint($('lab-in'), degraded);
-  paint($('lab-out'), out);
-  paint($('lab-truth'), state.truth, { lo: 0, hi: 1 });
+  paint($('lab-in'), degraded, { src: LAB_W });
+  paint($('lab-out'), out, { src: LAB_W });
+  if (!lab.truth) lab.truth = E.resample(state.truth, W, W, LAB_W, LAB_W);
+  paint($('lab-truth'), lab.truth, { lo: 0, hi: 1, src: LAB_W });
 
-  const n = E.affineFit(E.normalise(out), state.truth);
-  $('l-psnr').textContent = E.psnr(n, state.truth).toFixed(1);
-  $('l-ssim').textContent = E.ssim(n, state.truth).toFixed(3);
-  $('l-cnr').textContent = E.cnr(out).toFixed(1);
-  $('l-det').textContent = E.detectBlobs(out).length;
+  const n = E.affineFit(E.normalise(out), lab.truth);
+  $('l-psnr').textContent = E.psnr(n, lab.truth).toFixed(1);
+  $('l-ssim').textContent = E.ssim(n, lab.truth, LAB_W, LAB_W).toFixed(3);
+  $('l-cnr').textContent = E.cnr(out, LAB_W, LAB_W).toFixed(1);
+
+  if (withDetections) {
+    $('l-det').textContent = E.detectBlobs(out, { w: LAB_W, h: LAB_W }).length;
+  } else {
+    $('l-det').textContent = '…';
+  }
 }
 
+/* Coalesce to one run per frame: a drag fires input events far faster than the
+   chain can answer, and queueing them all is what makes a control feel stuck. */
 function scheduleLab() {
-  clearTimeout(lab.timer);
-  lab.timer = setTimeout(runLab, 120);
+  if (!lab.queued) {
+    lab.queued = true;
+    requestAnimationFrame(() => { lab.queued = false; runLab(); });
+  }
+  clearTimeout(lab.idle);
+  lab.idle = setTimeout(() => runLab({ withDetections: true }), 200);
 }
 
 async function useOwnImage(file) {
@@ -366,6 +555,7 @@ async function useOwnImage(file) {
     g[i] = (0.2126 * data.data[p] + 0.7152 * data.data[p + 1] + 0.0722 * data.data[p + 2]) * 0.06;
   }
   lab.source = E.resample(g, w, h);
+  lab.small = null;
   $('lab-note').textContent =
     'Running on your image. PSNR and SSIM are meaningless here — there is no paired ' +
     'target for it — so read CNR and the detection count instead.';
@@ -627,6 +817,7 @@ function wireFaq() {
   paint($('vp-canvas'), dn, { lo: 0, hi: 4095 });
 
   wireFlight();
+  wireCompare();
   wireScenes();
   wireScroll();
   await frame();
@@ -641,6 +832,7 @@ function wireFaq() {
   });
   $('c-reset').addEventListener('click', () => {
     lab.source = state.dn;
+    lab.small = null;
     $('lab-note').innerHTML =
       'Push blur past 2.5 px σ with a few DN of extra noise and watch SSIM collapse ' +
       'while the detection count <em>climbs</em>. Those are not recovered boulders — ' +
@@ -648,6 +840,7 @@ function wireFaq() {
       'stability test is the only thing standing between that texture and a hazard map.';
     runLab();
   });
+  showModelFacts();
   boot.set(96, 'ready');
   runLab();
   boot.set(100, 'ready');

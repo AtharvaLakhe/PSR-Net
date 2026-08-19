@@ -20,6 +20,8 @@ const TYPES = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.glb': 'model/gltf-binary',
+  '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream',
 };
 
 http.createServer((req, res) => {
@@ -53,6 +55,11 @@ http.createServer((req, res) => {
     res.writeHead(200, {
       'Content-Type': TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream',
       'Cache-Control': 'no-cache',
+      /* Cross-origin isolation, so onnxruntime-web may use SharedArrayBuffer and
+         run the network on several threads instead of one. Every asset this page
+         loads is same-origin, so require-corp costs nothing here. */
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
     });
     res.end(data);
   });

@@ -25,9 +25,43 @@ export function stats(a, mask) {
   return { n, mean, std: Math.sqrt(Math.max(s2 / Math.max(n, 1) - mean * mean, 0)), min, max };
 }
 
+/* Percentiles by histogram, not by sorting.
+
+   This is called about twenty times per pipeline run — every stretch, every
+   normalisation, every metric — and a full sort of a quarter-million floats costs
+   59 ms each time, which was most of the two and a half seconds a slider drag
+   used to take. One counting pass plus a linear walk is O(N) and lands within
+   one part in 4096 of the range, which is far below the precision any of the
+   callers need: they are choosing display limits and fitting scales, not
+   resolving individual DN. */
+const PCT_BINS = 4096;
+const _hist = new Float32Array(PCT_BINS);
+
 export function percentile(a, p) {
-  const c = Float32Array.from(a).sort();
-  return c[Math.min(c.length - 1, Math.max(0, Math.round((p / 100) * (c.length - 1))))];
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < a.length; i++) {
+    const v = a[i];
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!(hi > lo)) return lo;
+
+  _hist.fill(0);
+  const k = (PCT_BINS - 1) / (hi - lo);
+  for (let i = 0; i < a.length; i++) _hist[((a[i] - lo) * k) | 0]++;
+
+  const want = (p / 100) * a.length;
+  let acc = 0;
+  for (let b = 0; b < PCT_BINS; b++) {
+    const next = acc + _hist[b];
+    if (next >= want) {
+      // interpolate inside the bin so the result moves smoothly with p
+      const frac = _hist[b] > 0 ? (want - acc) / _hist[b] : 0;
+      return lo + ((b + frac) / k);
+    }
+    acc = next;
+  }
+  return hi;
 }
 
 export function histogram(a, bins, lo, hi) {
@@ -60,18 +94,64 @@ function transpose(src, dst, w, h) {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) dst[x * h + y] = src[y * w + x];
 }
 
+/* The vertical half of a box blur, walked in place down the columns.
+
+   The transpose trick is the right answer for a wide kernel, where the box
+   passes dominate and turning the vertical pass into a horizontal one pays for
+   the shuffling. Richardson-Lucy uses a two-pixel radius and calls this twice
+   per iteration, sixty iterations deep — there the six full transposes per blur
+   are the entire cost, and striding down the columns instead is much cheaper
+   even though the access pattern is worse. */
+function boxPassV(src, dst, w, h, r) {
+  const inv = 1 / (2 * r + 1);
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += src[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      dst[y * w + x] = acc * inv;
+      acc += src[Math.min(h - 1, y + r + 1) * w + x] - src[Math.max(0, y - r) * w + x];
+    }
+  }
+}
+
+/* Scratch buffers, reused. Richardson-Lucy calls this twice per iteration and up
+   to sixty iterations deep; allocating three fresh arrays each time was handing
+   the garbage collector a megabyte per iteration to clean up mid-drag, which is
+   where a slider's worth of jank comes from. Keyed by length so the story's
+   512x512 and the lab's 256x256 each keep their own. */
+const _scratch = new Map();
+
+function scratch(len, i) {
+  let set = _scratch.get(len);
+  if (!set) {
+    set = [new Float32Array(len), new Float32Array(len), new Float32Array(len)];
+    _scratch.set(len, set);
+  }
+  return set[i];
+}
+
 export function blur(a, sigma, w = W, h = W) {
   if (sigma <= 0.05) return Float32Array.from(a);
   const r = Math.max(1, Math.round(sigma * 1.18));
-  let src = Float32Array.from(a);
-  const t1 = new Float32Array(a.length), t2 = new Float32Array(a.length);
-  for (let pass = 0; pass < 3; pass++) {
-    boxPass(src, t1, w, h, r);
-    transpose(t1, t2, w, h);
-    boxPass(t2, t1, h, w, r);
-    transpose(t1, src, h, w);
+  const src = scratch(a.length, 0);
+  src.set(a);
+  const t1 = scratch(a.length, 1), t2 = scratch(a.length, 2);
+
+  if (r <= 6) {
+    for (let pass = 0; pass < 3; pass++) {
+      boxPass(src, t1, w, h, r);
+      boxPassV(t1, src, w, h, r);
+    }
+  } else {
+    for (let pass = 0; pass < 3; pass++) {
+      boxPass(src, t1, w, h, r);
+      transpose(t1, t2, w, h);
+      boxPass(t2, t1, h, w, r);
+      transpose(t1, src, h, w);
+    }
   }
-  return src;
+  // the caller owns its result, so hand back a copy rather than the scratch
+  return Float32Array.from(src);
 }
 
 /* ── 01 · radiometric correction ─────────────────────────────────────────────
