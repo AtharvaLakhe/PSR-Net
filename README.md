@@ -42,17 +42,10 @@ instead of drawing a mathematically perfect circle.
 
 ## Deploying
 
-Pushing to `main` deploys, via `.github/workflows/deploy.yml`. It needs one
-repository secret:
+Vercel watches this repository: pushing to `main` deploys to production, and
+pushing a branch gets a preview URL. Nothing else to run.
 
-1. Create a token at <https://vercel.com/account/settings/tokens>
-2. Add it as `VERCEL_TOKEN` under Settings → Secrets and variables → Actions
-
-The alternative, if you would rather Vercel watch the repo itself: add a GitHub
-Login Connection to the Vercel account, then `vercel git connect`. That makes
-the workflow redundant — delete it if you go that way.
-
-Either path runs `scripts/vendor.mjs`, which copies three, gsap and the ONNX
+The build runs `scripts/vendor.mjs`, which copies three, gsap and the ONNX
 runtime out of `node_modules` into `vendor/`. The import maps point at
 `/vendor`, so the same paths work locally and on a static host, where
 `node_modules` does not exist.
