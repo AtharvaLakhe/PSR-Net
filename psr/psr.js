@@ -492,7 +492,44 @@ async function showModelFacts() {
    stop moving, because a count that flickers during a drag tells you nothing
    anyway. */
 const LAB_W = 256;
-const lab = { source: null, small: null, truth: null, queued: false, idle: 0, last: null };
+const lab = {
+  source: null, small: null, truth: null, queued: false, idle: 0, last: null,
+  /* Whether a paired target exists for whatever is currently loaded. True for
+     the shipped OHRC frame, false the moment you bring your own image — because
+     for your image nothing was withheld, so there is nothing to compare against
+     and every full-reference metric is undefined. */
+  hasTruth: true,
+};
+
+/* Say so on the canvas itself. The alternative — leaving the built-in target on
+   screen next to somebody else's photograph — silently invites the reader to
+   compare two unrelated pictures, and quotes a PSNR for the privilege. */
+function paintNoTarget() {
+  const c = $('lab-truth');
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0a0d14';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = 'rgba(200,195,184,.14)';
+  ctx.setLineDash([4, 5]);
+  ctx.strokeRect(10.5, 10.5, c.width - 21, c.height - 21);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#7d8494';
+  ctx.textAlign = 'center';
+  ctx.font = '600 12px ui-monospace, monospace';
+  ctx.fillText('NO TARGET EXISTS', c.width / 2, c.height / 2 - 26);
+  ctx.font = '12px system-ui, sans-serif';
+  for (const [i, line] of [
+    'This is your image. Nothing was',
+    'withheld from the pipeline, so there',
+    'is nothing to score it against.',
+    '',
+    'PSNR and SSIM are undefined here.',
+  ].entries()) {
+    ctx.fillStyle = i === 4 ? '#ffb454' : '#7d8494';
+    ctx.fillText(line, c.width / 2, c.height / 2 + 2 + i * 17);
+  }
+  ctx.textAlign = 'start';
+}
 
 function labSource() {
   if (!lab.small) lab.small = E.resample(lab.source, W, W, LAB_W, LAB_W);
@@ -519,12 +556,21 @@ function runLab({ withDetections = false } = {}) {
 
   paint($('lab-in'), degraded, { src: LAB_W });
   paint($('lab-out'), out, { src: LAB_W });
-  if (!lab.truth) lab.truth = E.resample(state.truth, W, W, LAB_W, LAB_W);
-  paint($('lab-truth'), lab.truth, { lo: 0, hi: 1, src: LAB_W });
 
-  const n = E.affineFit(E.normalise(out), lab.truth);
-  $('l-psnr').textContent = E.psnr(n, lab.truth).toFixed(1);
-  $('l-ssim').textContent = E.ssim(n, lab.truth, LAB_W, LAB_W).toFixed(3);
+  if (lab.hasTruth) {
+    if (!lab.truth) lab.truth = E.resample(state.truth, W, W, LAB_W, LAB_W);
+    paint($('lab-truth'), lab.truth, { lo: 0, hi: 1, src: LAB_W });
+    const n = E.affineFit(E.normalise(out), lab.truth);
+    $('l-psnr').textContent = E.psnr(n, lab.truth).toFixed(1);
+    $('l-ssim').textContent = E.ssim(n, lab.truth, LAB_W, LAB_W).toFixed(3);
+  } else {
+    paintNoTarget();
+    // a dash, not a number: there is no reference, so there is no score
+    $('l-psnr').textContent = '—';
+    $('l-ssim').textContent = '—';
+  }
+
+  // CNR and the detector need no reference, so they stay meaningful either way
   $('l-cnr').textContent = E.cnr(out, LAB_W, LAB_W).toFixed(1);
 
   if (withDetections) {
@@ -556,10 +602,13 @@ async function useOwnImage(file) {
   }
   lab.source = E.resample(g, w, h);
   lab.small = null;
-  $('lab-note').textContent =
-    'Running on your image. PSNR and SSIM are meaningless here — there is no paired ' +
-    'target for it — so read CNR and the detection count instead.';
-  runLab();
+  lab.hasTruth = false;
+  $('lab-truth-cap').textContent = 'No target — nothing to compare against';
+  $('lab-note').innerHTML =
+    'Running on <b>your</b> image. There is no paired target for it, so PSNR and SSIM ' +
+    'are undefined and shown as dashes rather than as numbers against an unrelated ' +
+    'picture. CNR and the detection count need no reference and still mean what they say.';
+  runLab({ withDetections: true });
 }
 
 
@@ -812,6 +861,8 @@ function wireScroll() {
   $('c-reset').addEventListener('click', () => {
     lab.source = state.dn;
     lab.small = null;
+    lab.hasTruth = true;
+    $('lab-truth-cap').textContent = 'Target · never seen by the pipeline';
     $('lab-note').innerHTML =
       'Push blur past 2.5 px σ with a few DN of extra noise and watch SSIM collapse ' +
       'while the detection count <em>climbs</em>. Those are not recovered boulders — ' +
