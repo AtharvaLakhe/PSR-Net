@@ -17,10 +17,10 @@
   "homepage": "https://psr-net.vercel.app",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AtharvaLakhe/SnowWhite.git"
+    "url": "https://github.com/AtharvaLakhe/PSR-Net.git"
   },
   "bugs": {
-    "url": "https://github.com/AtharvaLakhe/SnowWhite/issues"
+    "url": "https://github.com/AtharvaLakhe/PSR-Net/issues"
   },
   "author": "Atharva Lakhe",
   "license": "MIT",
